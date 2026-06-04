@@ -18,6 +18,5 @@ variable "db_password" {
 variable "jwt_secret" {
   description = "Secret key for JWT verification in frontend service"
   type        = string
-  default     = "translation-center-secret-prod"
   sensitive   = true
 }
