@@ -14,25 +14,34 @@ After translation, the document goes through an approval workflow where reviewer
 3. **Storage Layer (Google Cloud Storage)** uses three buckets: `translation_input_files` for source files, `translation_output_files` for translation candidate and final output documents, and `translation_config` for configs (`translation_config.md`), prompts (`translation_prompt.md`), corpus, and DNT terms list.
 4. **Translation Backend Service (Python FastAPI)** listens for triggers, fetches the document, extracts block layout items, calls Gemini model API to translate layout content, and overlays translated texts back onto the original layout coordinates to preserve formatting.
 
+## Deploy instructions
+
+Use files under the terraform folder to create the relevant services in a GCP project:
+
+cd terraform
+terraform init
+terraform apply -var="project_id=CHANGE_ME" -var="db_password=YOUR_MYSQL_PASSWORD"
+
+
 ---
 
 ## Directory Mappings
 
-- [database/](file:///Users/jamarmu/Workdir/Antigravity/Transfinsa/TranslationCenter/database/README.md): MySQL schema scripts.
-  - [database/schema.sql](file:///Users/jamarmu/Workdir/Antigravity/Transfinsa/TranslationCenter/database/schema.sql)
-- [frontend/](file:///Users/jamarmu/Workdir/Antigravity/Transfinsa/TranslationCenter/frontend/README.md): Vite React + Express server API code.
-  - [frontend/server.js](file:///Users/jamarmu/Workdir/Antigravity/Transfinsa/TranslationCenter/frontend/server.js)
-  - [frontend/users.json](file:///Users/jamarmu/Workdir/Antigravity/Transfinsa/TranslationCenter/frontend/users.json)
-  - [frontend/src/App.jsx](file:///Users/jamarmu/Workdir/Antigravity/Transfinsa/TranslationCenter/frontend/src/App.jsx)
-  - [frontend/src/index.css](file:///Users/jamarmu/Workdir/Antigravity/Transfinsa/TranslationCenter/frontend/src/index.css)
-- [backend/](file:///Users/jamarmu/Workdir/Antigravity/Transfinsa/TranslationCenter/backend/README.md): Python FastAPI translator microservice.
-  - [backend/main.py](file:///Users/jamarmu/Workdir/Antigravity/Transfinsa/TranslationCenter/backend/main.py)
-  - [backend/translator.py](file:///Users/jamarmu/Workdir/Antigravity/Transfinsa/TranslationCenter/backend/translator.py)
-- [terraform/](file:///Users/jamarmu/Workdir/Antigravity/Transfinsa/TranslationCenter/terraform/README.md): Infrastructure deployment scripts.
-  - [terraform/main.tf](file:///Users/jamarmu/Workdir/Antigravity/Transfinsa/TranslationCenter/terraform/main.tf)
-- [config_init/](file:///Users/jamarmu/Workdir/Antigravity/Transfinsa/TranslationCenter/config_init/): Initialization files for translation config.
-  - [config_init/translation_corpus.csv](file:///Users/jamarmu/Workdir/Antigravity/Transfinsa/TranslationCenter/config_init/translation_corpus.csv)
-  - [config_init/do_not_translate.csv](file:///Users/jamarmu/Workdir/Antigravity/Transfinsa/TranslationCenter/config_init/do_not_translate.csv)
+- [database/](file:///TranslationCenter/database/README.md): MySQL schema scripts.
+  - [database/schema.sql](file:///TranslationCenter/database/schema.sql)
+- [frontend/](file:///TranslationCenter/frontend/README.md): Vite React + Express server API code.
+  - [frontend/server.js](file:///TranslationCenter/frontend/server.js)
+  - [frontend/users.json](file:///TranslationCenter/frontend/users.json)
+  - [frontend/src/App.jsx](file:///TranslationCenter/frontend/src/App.jsx)
+  - [frontend/src/index.css](file:///TranslationCenter/frontend/src/index.css)
+- [backend/](file:///TranslationCenter/backend/README.md): Python FastAPI translator microservice.
+  - [backend/main.py](file:///TranslationCenter/backend/main.py)
+  - [backend/translator.py](file:///TranslationCenter/backend/translator.py)
+- [terraform/](file:///TranslationCenter/terraform/README.md): Infrastructure deployment scripts.
+  - [terraform/main.tf](file:///TranslationCenter/terraform/main.tf)
+- [config_init/](file:///TranslationCenter/config_init/): Initialization files for translation config.
+  - [config_init/translation_corpus.csv](file:///TranslationCenter/config_init/translation_corpus.csv)
+  - [config_init/do_not_translate.csv](file:///TranslationCenter/config_init/do_not_translate.csv)
 
 ---
 
