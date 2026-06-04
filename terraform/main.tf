@@ -123,7 +123,7 @@ resource "google_cloud_run_service" "backend" {
     spec {
       service_account_name = google_service_account.run_sa.email
       containers {
-        image = "gcr.io/${var.project_id}/translation-backend:latest"
+        image = "${var.region}-docker.pkg.dev/${var.project_id}/translation-repo/translation-backend:latest"
         
         env {
           name  = "DB_HOST"
@@ -175,7 +175,7 @@ resource "google_cloud_run_service" "frontend" {
     spec {
       service_account_name = google_service_account.run_sa.email
       containers {
-        image = "gcr.io/${var.project_id}/translation-frontend:latest"
+        image = "${var.region}-docker.pkg.dev/${var.project_id}/translation-repo/translation-frontend:latest"
 
         env {
           name  = "DB_HOST"
