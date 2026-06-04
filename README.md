@@ -23,7 +23,7 @@ Use files under the terraform folder to create the relevant services in a GCP pr
 
 cd terraform
 terraform init
-terraform apply -var="project_id=CHANGE_ME" -var="db_password=YOUR_MYSQL_PASSWORD"
+terraform apply -var="project_id=CHANGE_ME" -var="db_password=..." -var="jwt_secret=YOUR_SECURE_PRODUCTION_JWT_SECRET"
 
 
 ---
