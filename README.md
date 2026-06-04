@@ -4,6 +4,9 @@ Translation Center is a microservices-based translation management system. It en
 
 After translation, the document goes through an approval workflow where reviewers can approve or reject the candidates.
 
+Created with Antigravity and Gemini 3.5 Flash by jamarmu@google.com.
+Use at you own risk.
+
 ## System Architecture
 
 ![Translation Center - Software Architecture](./architecture.png)
