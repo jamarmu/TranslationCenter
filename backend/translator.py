@@ -6,22 +6,26 @@ import tempfile
 import sys
 from datetime import datetime
 import fitz  # PyMuPDF
-import google.generativeai as genai
+import vertexai
+from vertexai.generative_models import GenerativeModel
 from google.cloud import storage
 from googleapiclient.discovery import build
 from google.oauth2 import service_account
 from db import log_event, log_tokens, update_job_status, get_job
 
 # Load environment variables
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GCP_PROJECT = os.getenv("GCP_PROJECT", "translation-center")
-CONFIG_BUCKET = `${GCP_PROJECT}_translation_config`
-OUTPUT_BUCKET = `${GCP_PROJECT}_translation_output_files`
-INPUT_BUCKET = `${GCP_PROJECT}_translation_input_files`
+GCP_REGION = os.getenv("GCP_REGION", "us-central1")
+CONFIG_BUCKET = f"{GCP_PROJECT}_translation_config"
+OUTPUT_BUCKET = f"{GCP_PROJECT}_translation_output_files"
+INPUT_BUCKET = f"{GCP_PROJECT}_translation_input_files"
 
-# Configure Gemini
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
+# Initialize Vertex AI SDK
+try:
+    vertexai.init(project=GCP_PROJECT, location=GCP_REGION)
+    log_event("INFO", f"Vertex AI initialized successfully in project {GCP_PROJECT} ({GCP_REGION})")
+except Exception as e:
+    log_event("ERROR", f"Failed to initialize Vertex AI: {e}")
 
 # Helper to get Google Drive/Docs API service client
 def get_google_services():
@@ -110,8 +114,8 @@ def run_gemini_translation(prompt_text, model_name="Gemini 3.5 Flash"):
         api_model = "gemini-1.5-pro"
         
     try:
-        model = genai.GenerativeModel(api_model)
-        log_event("INFO", f"Sending translation request to model {api_model}")
+        model = GenerativeModel(api_model)
+        log_event("INFO", f"Sending translation request via Vertex AI to model {api_model}")
         response = model.generate_content(prompt_text)
         
         # Token usage calculations
@@ -121,7 +125,7 @@ def run_gemini_translation(prompt_text, model_name="Gemini 3.5 Flash"):
         
         return response.text, total_tokens
     except Exception as e:
-        log_event("ERROR", f"Gemini API invocation failed: {e}")
+        log_event("ERROR", f"Vertex AI Gemini API invocation failed: {e}")
         raise e
 
 # Core PDF Text Extraction & Redaction Translation Overlay

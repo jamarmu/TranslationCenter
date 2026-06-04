@@ -10,7 +10,8 @@ backend/.venv/
 **/*.pyd
 .DS_Store
 *.log
-dist/
 build/
 .tmp/
 uploads/
+# Do not ignore dist/ here because Dockerfile needs to copy the compiled build output!
+# dist/

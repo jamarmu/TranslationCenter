@@ -15,12 +15,6 @@ variable "db_password" {
   sensitive   = true
 }
 
-variable "gemini_api_key" {
-  description = "Gemini Model API Key for translation services"
-  type        = string
-  sensitive   = true
-}
-
 variable "jwt_secret" {
   description = "Secret key for JWT verification in frontend service"
   type        = string

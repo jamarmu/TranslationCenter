@@ -114,6 +114,13 @@ resource "google_project_iam_member" "sql_client" {
   member  = "serviceAccount:${google_service_account.run_sa.email}"
 }
 
+# Vertex AI User role for SA to call Gemini
+resource "google_project_iam_member" "vertex_ai_user" {
+  project = var.project_id
+  role    = "roles/aiplatform.user"
+  member  = "serviceAccount:${google_service_account.run_sa.email}"
+}
+
 # --- Cloud Run Translation Backend Service ---
 resource "google_cloud_run_service" "backend" {
   name     = "translation-backend"
@@ -140,10 +147,6 @@ resource "google_cloud_run_service" "backend" {
         env {
           name  = "DB_NAME"
           value = google_sql_database.database.name
-        }
-        env {
-          name  = "GEMINI_API_KEY"
-          value = var.gemini_api_key
         }
         env {
           name  = "GCP_PROJECT"

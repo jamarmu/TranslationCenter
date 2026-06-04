@@ -28,15 +28,13 @@ Provisions a managed MySQL database instance running version 8.0 on a lightweigh
 ## Deployment Steps
 
 1. Install Terraform.
-2. Build and push the docker images for the frontend and backend to Google Container Registry (GCR) in your project:
+2. Build and push the docker images for the frontend and backend to GCP Artifact Registry in your project:
    ```bash
    # Build & push backend
-   docker build -t gcr.io/[PROJECT_ID]/translation-backend:latest ./backend
-   docker push gcr.io/[PROJECT_ID]/translation-backend:latest
+   gcloud builds submit --tag us-central1-docker.pkg.dev/[PROJECT_ID]/translation-repo/translation-backend:latest ./backend
    
    # Build & push frontend
-   docker build -t gcr.io/[PROJECT_ID]/translation-frontend:latest ./frontend
-   docker push gcr.io/[PROJECT_ID]/translation-frontend:latest
+   gcloud builds submit --tag us-central1-docker.pkg.dev/[PROJECT_ID]/translation-repo/translation-frontend:latest ./frontend
    ```
 3. Initialize the directory and review variables:
    ```bash
@@ -44,9 +42,9 @@ Provisions a managed MySQL database instance running version 8.0 on a lightweigh
    ```
 4. Perform execution check:
    ```bash
-   terraform plan -var="project_id=[PROJECT_ID]" -var="db_password=[MYSQL_ROOT_PASS]" -var="gemini_api_key=[API_KEY]"
+   terraform plan -var="project_id=[PROJECT_ID]" -var="db_password=[MYSQL_ROOT_PASS]"
    ```
 5. Apply and provision:
    ```bash
-   terraform apply -var="project_id=[PROJECT_ID]" -var="db_password=[MYSQL_ROOT_PASS]" -var="gemini_api_key=[API_KEY]"
+   terraform apply -var="project_id=[PROJECT_ID]" -var="db_password=[MYSQL_ROOT_PASS]"
    ```

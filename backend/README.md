@@ -28,9 +28,9 @@ DB_USER=root
 DB_PASSWORD=password
 DB_NAME=translation_center
 DB_PORT=3306
-GEMINI_API_KEY=AIzaSy...
 GCP_PROJECT=translation-center-project
-GOOGLE_APPLICATION_CREDENTIALS=/path/to/credentials.json
+GCP_REGION=us-central1
+GOOGLE_APPLICATION_CREDENTIALS=/path/to/credentials.json # Required for local development to authenticate Vertex AI calls
 ```
 
 ## Running Locally
