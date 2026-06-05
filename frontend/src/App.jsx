@@ -6,6 +6,14 @@ const TRANSLATION_CHARS = [
   'Ω', 'Ø', 'Ç', 'Ñ', 'ß', 'И', 'ע', 'ع', 'हि', 'ไทย'
 ];
 
+// Helper to rewrite gs:// GCS URLs directly to GCS HTTP URLs (authenticated browser links)
+const getDownloadUrl = (path) => {
+  if (path && path.startsWith('gs://')) {
+    return path.replace('gs://', 'https://storage.cloud.google.com/');
+  }
+  return path;
+};
+
 export default function App() {
   const [user, setUser] = useState(() => {
     const saved = localStorage.getItem('user');
@@ -61,7 +69,7 @@ export default function App() {
 
           <div className="user-tag">
             <span style={{ fontSize: '14px', color: '#9ca3af' }}>
-              Logged in as <strong style={{ color: 'white' }}>{user.username}</strong>
+              Logged in as <strong style={{ color: 'var(--text-primary)' }}>{user.username}</strong>
             </span>
             <span className="role-badge">{user.role}</span>
             
@@ -72,7 +80,7 @@ export default function App() {
                   style={{ padding: '8px 16px' }}
                   onClick={() => setActiveView('user')}
                 >
-                  Dashboard
+                  Translations
                 </button>
                 <button 
                   className={`btn ${activeView === 'admin' ? 'btn-primary' : 'btn-secondary'}`}
@@ -195,6 +203,8 @@ function UserDashboard({ token, user, showError, showSuccess }) {
   const [jobs, setJobs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
+  const [pageSize, setPageSize] = useState(20);
+  const [currentPage, setCurrentPage] = useState(1);
 
   const fetchJobs = async () => {
     try {
@@ -252,6 +262,12 @@ function UserDashboard({ token, user, showError, showSuccess }) {
     }
   };
 
+  const totalPages = Math.max(1, Math.ceil(jobs.length / pageSize));
+  const safeCurrentPage = Math.min(currentPage, totalPages);
+  const startIndex = (safeCurrentPage - 1) * pageSize;
+  const endIndex = startIndex + pageSize;
+  const displayedJobs = jobs.slice(startIndex, endIndex);
+
   return (
     <div className="dashboard-grid">
       <div className="glass-panel">
@@ -272,84 +288,154 @@ function UserDashboard({ token, user, showError, showSuccess }) {
         ) : jobs.length === 0 ? (
           <div className="empty-state">No translation requests found. Create a new job to start.</div>
         ) : (
-          <div className="table-container">
-            <table>
-              <thead>
-                <tr>
-                  <th>Job Name</th>
-                  <th>Source File</th>
-                  <th>Candidate Translation</th>
-                  <th>Approved Translation</th>
-                  <th>Created At</th>
-                  <th>Status</th>
-                  {user.role !== 'viewer' && <th>Actions</th>}
-                </tr>
-              </thead>
-              <tbody>
-                {jobs.map((job) => {
-                  const isRejected = job.status === 'REJECTED';
-                  const isFailed = job.status === 'FAILED';
-                  const displayRowClass = (isRejected || isFailed) ? 'row-rejected' : '';
-                  
-                  return (
-                    <tr key={job.id} className={displayRowClass}>
-                      <td>
-                        <strong style={{ display: 'block', color: 'white' }}>{job.job_name}</strong>
-                        <span style={{ fontSize: '12px', color: '#6b7280' }}>
-                          {job.source_lang} → {job.target_lang} ({job.model_used})
-                        </span>
-                      </td>
-                      <td>
-                        <a href={job.source_file_path} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--primary)', textDecoration: 'none' }}>
-                          Source ({job.file_type.toUpperCase()})
-                        </a>
-                      </td>
-                      <td>
-                        {job.candidate_file_path ? (
-                          <a href={job.candidate_file_path} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--primary)', textDecoration: 'none' }}>
-                            Candidate
-                          </a>
-                        ) : (
-                          <span style={{ color: '#6b7280' }}>-</span>
-                        )}
-                      </td>
-                      <td>
-                        {job.status === 'APPROVED' && job.output_file_path ? (
-                          <a href={job.output_file_path} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent-neon)', textDecoration: 'none', fontWeight: '500' }}>
-                            Download
-                          </a>
-                        ) : (
-                          <span style={{ color: '#6b7280' }}>Not Approved</span>
-                        )}
-                      </td>
-                      <td>{new Date(job.created_at).toLocaleString()}</td>
-                      <td>
-                        <span className={`status-pill status-${job.status.toLowerCase()}`}>
-                          {job.status}
-                        </span>
-                      </td>
-                      {user.role !== 'viewer' && (
+          <>
+            <div className="table-container">
+              <table>
+                <thead>
+                  <tr>
+                    <th style={{ width: '80px' }}>Job ID</th>
+                    <th>Job Name</th>
+                    <th>Source File</th>
+                    <th>Candidate Translation</th>
+                    <th>Approved Translation</th>
+                    <th>Tokens</th>
+                    <th>Created At</th>
+                    <th>Status</th>
+                    {user.role !== 'viewer' && <th>Actions</th>}
+                  </tr>
+                </thead>
+                <tbody>
+                  {displayedJobs.map((job) => {
+                    const isRejected = job.status === 'REJECTED';
+                    const isFailed = job.status === 'FAILED';
+                    const displayRowClass = (isRejected || isFailed) ? 'row-rejected' : '';
+                    
+                    return (
+                      <tr key={job.id} className={displayRowClass}>
                         <td>
-                          {job.status === 'PENDING_REVIEW' ? (
-                            <div style={{ display: 'flex', gap: '8px' }}>
-                              <button className="btn btn-primary" style={{ padding: '6px 12px', fontSize: '12px' }} onClick={() => handleApprove(job.id)}>
-                                Approve
-                              </button>
-                              <button className="btn btn-danger" style={{ padding: '6px 12px', fontSize: '12px' }} onClick={() => handleReject(job.id)}>
-                                Reject
-                              </button>
-                            </div>
+                          <span style={{ fontWeight: '600', color: 'var(--text-secondary)' }}>
+                            #{job.id}
+                          </span>
+                        </td>
+                        <td>
+                          <strong style={{ display: 'block', color: 'var(--text-primary)' }}>{job.job_name}</strong>
+                          <span style={{ fontSize: '12px', color: '#6b7280' }}>
+                            {job.source_lang} → {job.target_lang} ({job.model_used})
+                          </span>
+                        </td>
+                        <td>
+                          <a href={getDownloadUrl(job.source_file_path)} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--primary)', textDecoration: 'none' }}>
+                            Source ({job.file_type.toUpperCase()})
+                          </a>
+                        </td>
+                        <td>
+                          {job.candidate_file_path && job.status !== 'APPROVED' ? (
+                            <a href={getDownloadUrl(job.candidate_file_path)} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--primary)', textDecoration: 'none' }}>
+                              Candidate
+                            </a>
                           ) : (
-                            <span style={{ color: '#6b7280', fontSize: '13px' }}>Locked</span>
+                            <span style={{ color: '#6b7280' }}>-</span>
                           )}
                         </td>
-                      )}
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+                        <td>
+                          {job.status === 'APPROVED' && job.output_file_path ? (
+                            <a href={getDownloadUrl(job.output_file_path)} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent-neon)', textDecoration: 'none', fontWeight: '500' }}>
+                              Translated
+                            </a>
+                          ) : (
+                            <span style={{ color: '#6b7280' }}>Not Approved</span>
+                          )}
+                        </td>
+                        <td>
+                          {job.tokens_consumed > 0 ? (
+                            <span style={{ fontWeight: '500', color: 'var(--text-primary)' }}>
+                              {job.tokens_consumed.toLocaleString()}
+                            </span>
+                          ) : (
+                            <span style={{ color: '#6b7280' }}>-</span>
+                          )}
+                        </td>
+                        <td>{new Date(job.created_at).toLocaleString()}</td>
+                        <td>
+                          <span className={`status-pill status-${job.status.toLowerCase()}`}>
+                            {job.status}
+                          </span>
+                        </td>
+                        {user.role !== 'viewer' && (
+                          <td>
+                            {job.status === 'PENDING_REVIEW' ? (
+                              <div style={{ display: 'flex', gap: '8px' }}>
+                                <button className="btn btn-primary" style={{ padding: '6px 12px', fontSize: '12px' }} onClick={() => handleApprove(job.id)}>
+                                  Approve
+                                </button>
+                                <button className="btn btn-danger" style={{ padding: '6px 12px', fontSize: '12px' }} onClick={() => handleReject(job.id)}>
+                                  Reject
+                                </button>
+                              </div>
+                            ) : (
+                              <span style={{ color: '#6b7280', fontSize: '13px' }}>Locked</span>
+                            )}
+                          </td>
+                        )}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Pagination Controls */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '20px', padding: '10px 0', borderTop: '1px solid var(--panel-border)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>Jobs per page:</span>
+                <select 
+                  value={pageSize} 
+                  onChange={(e) => {
+                    setPageSize(Number(e.target.value));
+                    setCurrentPage(1);
+                  }}
+                  style={{
+                    padding: '6px 10px',
+                    borderRadius: '6px',
+                    border: '1px solid var(--panel-border)',
+                    background: 'var(--panel-bg)',
+                    color: 'var(--text-primary)',
+                    fontSize: '14px',
+                    cursor: 'pointer'
+                  }}
+                >
+                  <option value={10}>10</option>
+                  <option value={20}>20</option>
+                  <option value={50}>50</option>
+                  <option value={100}>100</option>
+                </select>
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                <span style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>
+                  Showing {jobs.length > 0 ? startIndex + 1 : 0}–{Math.min(endIndex, jobs.length)} of {jobs.length}
+                </span>
+                <div style={{ display: 'flex', gap: '6px' }}>
+                  <button 
+                    className="btn btn-secondary" 
+                    style={{ padding: '6px 12px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                    onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                    disabled={safeCurrentPage === 1}
+                  >
+                    &larr; Previous
+                  </button>
+                  <button 
+                    className="btn btn-secondary" 
+                    style={{ padding: '6px 12px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                    onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+                    disabled={safeCurrentPage === totalPages}
+                  >
+                    Next &rarr;
+                  </button>
+                </div>
+              </div>
+            </div>
+          </>
         )}
       </div>
 
@@ -375,8 +461,30 @@ function NewJobModal({ token, onClose, fetchJobs, showError, showSuccess }) {
   const [sourceLang, setSourceLang] = useState('Spanish');
   const [targetLang, setTargetLang] = useState('English');
   const [driveUrl, setDriveUrl] = useState('');
+  const [destDriveUrl, setDestDriveUrl] = useState('');
   const [file, setFile] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [verbose, setVerbose] = useState(false);
+  const [availableModels, setAvailableModels] = useState([]);
+
+  useEffect(() => {
+    const fetchModels = async () => {
+      try {
+        const res = await fetch('/api/models', {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.models) {
+            setAvailableModels(data.models);
+          }
+        }
+      } catch (err) {
+        console.error('Failed to fetch models:', err);
+      }
+    };
+    fetchModels();
+  }, [token]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -390,11 +498,15 @@ function NewJobModal({ token, onClose, fetchJobs, showError, showSuccess }) {
     formData.append('model_override', modelOverride);
     formData.append('source_lang', sourceLang);
     formData.append('target_lang', targetLang);
+    formData.append('verbose', verbose);
     
     if (file) {
       formData.append('file', file);
     } else {
       formData.append('drive_url', driveUrl);
+      if (destDriveUrl.trim()) {
+        formData.append('destination_url', destDriveUrl.trim());
+      }
     }
 
     try {
@@ -465,9 +577,9 @@ function NewJobModal({ token, onClose, fetchJobs, showError, showSuccess }) {
             <label>Model Override (Optional)</label>
             <select value={modelOverride} onChange={(e) => setModelOverride(e.target.value)}>
               <option value="">Use Default Configured Model</option>
-              <option value="Gemini 3.5 Flash">Gemini 3.5 Flash</option>
-              <option value="Gemini 3.1 Pro">Gemini 3.1 Pro</option>
-              <option value="Gemini 3.1 Flash">Gemini 3.1 Flash</option>
+              {availableModels.map((m) => (
+                <option key={m} value={m}>{m}</option>
+              ))}
             </select>
           </div>
 
@@ -480,6 +592,7 @@ function NewJobModal({ token, onClose, fetchJobs, showError, showSuccess }) {
                 onChange={(e) => {
                   setFile(e.target.files[0]);
                   setDriveUrl('');
+                  setDestDriveUrl('');
                 }}
               />
             </div>
@@ -495,9 +608,39 @@ function NewJobModal({ token, onClose, fetchJobs, showError, showSuccess }) {
                 onChange={(e) => {
                   setDriveUrl(e.target.value);
                   setFile(null);
+                  if (!e.target.value.includes('document/d/') && !e.target.value.includes('docs.google.com')) {
+                    setDestDriveUrl('');
+                  }
                 }}
               />
             </div>
+
+            {(driveUrl.includes('document/d/') || driveUrl.includes('docs.google.com')) && (
+              <div className="form-group" style={{ marginTop: '16px', marginBottom: 0 }}>
+                <label>Destination Google Doc URL (Optional)</label>
+                <input 
+                  type="text" 
+                  placeholder="https://docs.google.com/document/d/..." 
+                  value={destDriveUrl}
+                  onChange={(e) => setDestDriveUrl(e.target.value)}
+                />
+                <p style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '6px', lineHeight: '1.4' }}>
+                  <strong>Reminder:</strong> Make sure you share this destination Google Doc with Editor access to <code style={{ background: 'var(--panel-border)', padding: '2px 4px', borderRadius: '4px' }}>translation-center-sa@californiahotel.iam.gserviceaccount.com</code> so the app has write permissions.
+                </p>
+              </div>
+            )}
+          </div>
+
+          <div className="form-group" style={{ marginBottom: '20px' }}>
+            <label className="checkbox-item" style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', userSelect: 'none' }}>
+              <input 
+                type="checkbox" 
+                checked={verbose} 
+                onChange={(e) => setVerbose(e.target.checked)}
+                style={{ width: 'auto', margin: 0 }}
+              />
+              <span style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>Enable Verbose Logging (log actual prompts to system logs)</span>
+            </label>
           </div>
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
@@ -545,6 +688,147 @@ function AdminDashboard({ token, showError, showSuccess }) {
   );
 }
 
+/* --- Admin - Horizontal scrolling SVG chart component --- */
+function Chart({ data, valueKey, fillGradient }) {
+  const chartRef = useRef(null);
+
+  useEffect(() => {
+    if (chartRef.current) {
+      chartRef.current.scrollLeft = chartRef.current.scrollWidth;
+    }
+  }, [data]);
+
+  if (!data || data.length === 0) {
+    return (
+      <div className="empty-state" style={{ height: '200px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        No data recorded in this time range.
+      </div>
+    );
+  }
+
+  const barWidth = 24;
+  const barGap = 12;
+  const chartHeight = 180;
+  const totalBars = data.length;
+  const chartWidth = totalBars * (barWidth + barGap) + 30;
+  const maxValue = Math.max(...data.map(d => Number(d[valueKey] || 0))) || 1;
+
+  const formatYValue = (val) => {
+    if (val >= 1000000) {
+      return (val / 1000000).toFixed(1).replace(/\.0$/, '') + 'M';
+    }
+    if (val >= 1000) {
+      return (val / 1000).toFixed(1).replace(/\.0$/, '') + 'K';
+    }
+    return Math.round(val).toString();
+  };
+
+  return (
+    <div style={{ display: 'flex', width: '100%', alignItems: 'stretch', marginTop: '15px' }}>
+      {/* Y-Axis Label and Ticks (Fixed on Left) */}
+      <svg width={50} height={220} style={{ overflow: 'visible', flexShrink: 0 }}>
+        {[20, 65, 110, 155, 200].map((yVal, i) => {
+          const tickVal = maxValue * (1 - i * 0.25);
+          return (
+            <g key={i}>
+              <text
+                x={40}
+                y={yVal + 4}
+                fill="var(--text-secondary)"
+                fontSize={10}
+                fontWeight={500}
+                textAnchor="end"
+              >
+                {formatYValue(tickVal)}
+              </text>
+              <line
+                x1={42}
+                y1={yVal}
+                x2={45}
+                y2={yVal}
+                stroke="var(--panel-border)"
+                strokeWidth={1}
+              />
+            </g>
+          );
+        })}
+        {/* Y-Axis Line */}
+        <line
+          x1={45}
+          y1={20}
+          x2={45}
+          y2={200}
+          stroke="var(--panel-border)"
+          strokeWidth={1}
+        />
+      </svg>
+
+      {/* Horizontal Scrolling Bars Chart */}
+      <div className="chart-container-wrapper" ref={chartRef} style={{ flexGrow: 1, overflowX: 'auto', marginTop: 0 }}>
+        <div style={{ width: `${chartWidth}px`, height: '220px', position: 'relative' }}>
+          <svg width={chartWidth} height={220} style={{ overflow: 'visible' }}>
+            <defs>
+              <linearGradient id={`grad-${valueKey}`} x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={fillGradient.start} />
+                <stop offset="100%" stopColor={fillGradient.end} stopOpacity={0.2} />
+              </linearGradient>
+            </defs>
+
+            {/* Render Grid Lines */}
+            {[20, 65, 110, 155, 200].map((yVal, i) => (
+              <line
+                key={i}
+                x1={0}
+                y1={yVal}
+                x2={chartWidth}
+                y2={yVal}
+                stroke="var(--panel-border)"
+                strokeOpacity={0.5}
+                strokeDasharray="4 4"
+                strokeWidth={1}
+              />
+            ))}
+
+            {/* Render bars */}
+            {data.map((item, index) => {
+              const val = Number(item[valueKey] || 0);
+              const height = (val / maxValue) * chartHeight;
+              const x = index * (barWidth + barGap) + 15;
+              const y = chartHeight - height + 20;
+
+              return (
+                <g key={index} style={{ cursor: 'pointer' }}>
+                  {/* Tooltip hover title */}
+                  <title>{`${item.period}: ${val.toLocaleString()}`}</title>
+                  <rect
+                    x={x}
+                    y={y}
+                    width={barWidth}
+                    height={height}
+                    fill={`url(#grad-${valueKey})`}
+                    rx={4}
+                  />
+                  {/* Label */}
+                  <text
+                    x={x + barWidth / 2}
+                    y={chartHeight + 35}
+                    fill="var(--text-secondary)"
+                    fontSize={10}
+                    textAnchor="middle"
+                    transform={`rotate(-45, ${x + barWidth / 2}, ${chartHeight + 35})`}
+                  >
+                    {item.period}
+                  </text>
+                </g>
+              );
+            })}
+          </svg>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* --- Admin - Usage Metrics Tab --- */
 function MetricsPanel({ token, showError }) {
   const [axis, setAxis] = useState('days'); // 'days', 'weeks', 'months'
@@ -569,81 +853,6 @@ function MetricsPanel({ token, showError }) {
   useEffect(() => {
     fetchStats();
   }, [axis]);
-
-  // Render horizontal scrolling SVG chart
-  const renderChart = (data, valueKey, fillGradient) => {
-    if (data.length === 0) {
-      return (
-        <div className="empty-state" style={{ height: '200px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          No data recorded in this time range.
-        </div>
-      );
-    }
-
-    const barWidth = 24;
-    const barGap = 12;
-    const chartHeight = 180;
-    const totalBars = data.length;
-    const chartWidth = totalBars * (barWidth + barGap) + 60;
-    const maxValue = Math.max(...data.map(d => Number(d[valueKey] || 0))) || 1;
-
-    // Scroll to the end (right side) on first load to view latest data
-    const chartRef = useRef(null);
-    useEffect(() => {
-      if (chartRef.current) {
-        chartRef.current.scrollLeft = chartRef.current.scrollWidth;
-      }
-    }, [data]);
-
-    return (
-      <div className="chart-container-wrapper" ref={chartRef}>
-        <div style={{ width: `${chartWidth}px`, height: '220px', position: 'relative' }}>
-          <svg width={chartWidth} height={220} style={{ overflow: 'visible' }}>
-            <defs>
-              <linearGradient id={`grad-${valueKey}`} x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor={fillGradient.start} />
-                <stop offset="100%" stopColor={fillGradient.end} stopOpacity={0.2} />
-              </linearGradient>
-            </defs>
-
-            {/* Render bars */}
-            {data.map((item, index) => {
-              const val = Number(item[valueKey] || 0);
-              const height = (val / maxValue) * chartHeight;
-              const x = index * (barWidth + barGap) + 40;
-              const y = chartHeight - height + 20;
-
-              return (
-                <g key={index} style={{ cursor: 'pointer' }}>
-                  {/* Tooltip hover title */}
-                  <title>{`${item.period}: ${val.toLocaleString()}`}</title>
-                  <rect
-                    x={x}
-                    y={y}
-                    width={barWidth}
-                    height={height}
-                    fill={`url(#grad-${valueKey})`}
-                    rx={4}
-                  />
-                  {/* Label */}
-                  <text
-                    x={x + barWidth / 2}
-                    y={chartHeight + 35}
-                    fill="#9ca3af"
-                    fontSize={10}
-                    textAnchor="middle"
-                    transform={`rotate(-45, ${x + barWidth / 2}, ${chartHeight + 35})`}
-                  >
-                    {item.period}
-                  </text>
-                </g>
-              );
-            })}
-          </svg>
-        </div>
-      </div>
-    );
-  };
 
   return (
     <div className="glass-panel">
@@ -673,12 +882,12 @@ function MetricsPanel({ token, showError }) {
         <div style={{ display: 'flex', flexDirection: 'column', gap: '30px' }}>
           <div>
             <h4 style={{ fontSize: '15px', fontWeight: '600', marginBottom: '12px' }}>Total Translation Pipelines Executed</h4>
-            {renderChart(stats.translations, 'count', { start: 'var(--primary)', end: '#4f46e5' })}
+            <Chart data={stats.translations} valueKey="count" fillGradient={{ start: 'var(--primary)', end: '#4f46e5' }} />
           </div>
 
           <div style={{ borderTop: '1px solid var(--panel-border)', paddingTop: '30px' }}>
             <h4 style={{ fontSize: '15px', fontWeight: '600', marginBottom: '12px' }}>Gemini Tokens Consumed</h4>
-            {renderChart(stats.tokens, 'tokens', { start: 'var(--accent-neon)', end: '#047857' })}
+            <Chart data={stats.tokens} valueKey="tokens" fillGradient={{ start: 'var(--accent-neon)', end: '#047857' }} />
           </div>
         </div>
       )}
@@ -749,7 +958,7 @@ function UsersPanel({ token, showError, showSuccess }) {
               {users.map((u) => (
                 <tr key={u.username}>
                   <td>
-                    <strong style={{ color: 'white' }}>{u.username}</strong>
+                    <strong style={{ color: 'var(--text-primary)' }}>{u.username}</strong>
                   </td>
                   <td>
                     <div className="checkbox-group">
@@ -790,7 +999,6 @@ function LogsPanel({ token, showError }) {
       });
       if (!res.ok) throw new Error('Failed to fetch system logs');
       const data = await res.json();
-      setJobs(data); // wait, it should be setLogs(data)!
       setLogs(data);
     } catch (err) {
       showError(err.message);

@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     output_file_path VARCHAR(1024) NULL, -- GCS URI or Google Drive Link
     file_type VARCHAR(50) NOT NULL, -- pdf, gdoc
     storage_type VARCHAR(50) NOT NULL, -- gcs, drive
+    verbose BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 );

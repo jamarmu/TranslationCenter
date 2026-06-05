@@ -26,7 +26,15 @@ app.use(cors());
 app.use(express.json());
 
 // Serve Static Frontend Assets (React bundle)
-app.use(express.static(path.join(__dirname, 'dist')));
+app.use(express.static(path.join(__dirname, 'dist'), {
+  setHeaders: (res, filePath) => {
+    if (filePath.endsWith('.html')) {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+    }
+  }
+}));
 
 // Database Connection Pool
 let dbPool = null;
@@ -34,23 +42,33 @@ let dbPool = null;
 async function getDb() {
   if (dbPool) return dbPool;
   try {
-    dbPool = mysql.createPool({
-      host: process.env.DB_HOST || 'localhost',
+    const config = {
       user: process.env.DB_USER || 'root',
       password: process.env.DB_PASSWORD || 'password',
       database: process.env.DB_NAME || 'translation_center',
-      port: parseInt(process.env.DB_PORT || '3306'),
       waitForConnections: true,
       connectionLimit: 10,
       queueLimit: 0
-    });
+    };
+
+    if (process.env.DB_SOCKET_PATH) {
+      config.socketPath = process.env.DB_SOCKET_PATH;
+    } else {
+      config.host = process.env.DB_HOST || 'localhost';
+      config.port = parseInt(process.env.DB_PORT || '3306');
+    }
+
+    dbPool = mysql.createPool(config);
     // Test connection
     const conn = await dbPool.getConnection();
     conn.release();
     return dbPool;
   } catch (err) {
     console.error('Database connection failed:', err.message);
-    await logToDb('ERROR', `Database connection failed: ${err.message}`);
+    // Avoid circular logging if database connection is failing
+    if (err.message.indexOf('Database connection failed') === -1) {
+      logToDb('ERROR', `Database connection failed: ${err.message}`).catch(() => {});
+    }
     throw err;
   }
 }
@@ -110,6 +128,21 @@ function requireRole(roles) {
   };
 }
 
+// Helper to fetch GCP OIDC Identity Token from local Metadata Server
+async function getGcpIdToken(audience) {
+  try {
+    const res = await fetch(`http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity?audience=${encodeURIComponent(audience)}`, {
+      headers: { 'Metadata-Flavor': 'Google' }
+    });
+    if (!res.ok) throw new Error(`Metadata server returned ${res.status}`);
+    const token = await res.text();
+    return token.trim();
+  } catch (err) {
+    console.error('Failed to retrieve GCP ID token:', err.message);
+    return null;
+  }
+}
+
 // --- API ROUTES ---
 
 // 1. Auth Endpoint
@@ -141,16 +174,76 @@ app.post('/api/login', async (req, res) => {
 app.get('/api/jobs', authenticateToken, async (req, res) => {
   try {
     const pool = await getDb();
-    const [rows] = await pool.query('SELECT * FROM jobs ORDER BY created_at DESC');
-    res.json(rows);
+    const [rows] = await pool.query(`
+      SELECT j.*, COALESCE(SUM(u.tokens_consumed), 0) AS tokens_consumed 
+      FROM jobs j 
+      LEFT JOIN usage_logs u ON j.id = u.job_id 
+      GROUP BY j.id 
+      ORDER BY j.created_at DESC
+    `);
+    
+    // Map gs:// paths directly to GCS HTTP object URLs (authenticated browser links)
+    const mappedRows = rows.map(row => {
+      const mapped = { ...row };
+      if (mapped.source_file_path && mapped.source_file_path.startsWith('gs://')) {
+        mapped.source_file_path = mapped.source_file_path.replace('gs://', 'https://storage.cloud.google.com/');
+      }
+      if (mapped.candidate_file_path && mapped.candidate_file_path.startsWith('gs://')) {
+        mapped.candidate_file_path = mapped.candidate_file_path.replace('gs://', 'https://storage.cloud.google.com/');
+      }
+      if (mapped.output_file_path && mapped.output_file_path.startsWith('gs://')) {
+        mapped.output_file_path = mapped.output_file_path.replace('gs://', 'https://storage.cloud.google.com/');
+      }
+      return mapped;
+    });
+
+    res.json(mappedRows);
   } catch (err) {
     res.status(500).json({ error: `Failed to fetch jobs: ${err.message}` });
   }
 });
 
+// 2b. Download GCS File Endpoint
+app.get('/api/download', authenticateToken, async (req, res) => {
+  const { path: gsPath } = req.query;
+  if (!gsPath || !gsPath.startsWith('gs://')) {
+    return res.status(400).json({ error: 'Invalid GCS path' });
+  }
+
+  try {
+    const parts = gsPath.replace('gs://', '').split('/');
+    const bucketName = parts[0];
+    const fileName = parts.slice(1).join('/');
+
+    // Security check: restrict downloads to our application buckets only
+    if (bucketName !== INPUT_BUCKET && bucketName !== OUTPUT_BUCKET && bucketName !== CONFIG_BUCKET) {
+      return res.status(403).json({ error: 'Access to this bucket is restricted' });
+    }
+
+    const file = storage.bucket(bucketName).file(fileName);
+    const [exists] = await file.exists();
+    if (!exists) {
+      return res.status(404).json({ error: 'File not found' });
+    }
+
+    // Set response headers for file transfer
+    res.setHeader('Content-Disposition', `attachment; filename="${path.basename(fileName)}"`);
+    
+    // Attempt to read the content type from file metadata or default
+    const [metadata] = await file.getMetadata();
+    res.setHeader('Content-Type', metadata.contentType || 'application/octet-stream');
+
+    // Pipe file stream directly to response
+    file.createReadStream().pipe(res);
+  } catch (err) {
+    console.error('Download error:', err);
+    res.status(500).json({ error: `Download failed: ${err.message}` });
+  }
+});
+
 // 3. Create Translation Request
 app.post('/api/jobs', authenticateToken, requireRole(['user', 'admin']), upload.single('file'), async (req, res) => {
-  const { job_name, model_override, source_lang, target_lang, drive_url } = req.body;
+  const { job_name, model_override, source_lang, target_lang, drive_url, verbose, destination_url } = req.body;
   const file = req.file;
 
   if (!job_name || !source_lang || !target_lang) {
@@ -195,11 +288,12 @@ app.post('/api/jobs', authenticateToken, requireRole(['user', 'admin']), upload.
 
     // Determine model to use (default to flash if override not set)
     const activeModel = model_override || 'Gemini 3.5 Flash';
+    const verboseVal = (verbose === 'true' || verbose === true) ? 1 : 0;
 
     const [result] = await pool.query(
-      `INSERT INTO jobs (job_name, model_override, model_used, source_lang, target_lang, status, source_file_path, file_type, storage_type) 
-       VALUES (?, ?, ?, ?, ?, 'PENDING', ?, ?, ?)`,
-      [job_name, model_override, activeModel, source_lang, target_lang, source_file_path, file_type, storage_type]
+      `INSERT INTO jobs (job_name, model_override, model_used, source_lang, target_lang, status, source_file_path, candidate_file_path, file_type, storage_type, verbose) 
+       VALUES (?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?)`,
+      [job_name, model_override, activeModel, source_lang, target_lang, source_file_path, destination_url || null, file_type, storage_type, verboseVal]
     );
 
     const newJobId = result.insertId;
@@ -207,15 +301,36 @@ app.post('/api/jobs', authenticateToken, requireRole(['user', 'admin']), upload.
 
     // Trigger backend translator service
     const translatorUrl = process.env.TRANSLATION_BACKEND_URL || 'http://localhost:5000/translate';
-    // Async call to translator backend
-    fetch(translatorUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ job_id: newJobId })
-    }).catch(err => {
-      console.error(`Failed to trigger translation backend for Job ${newJobId}:`, err.message);
-      logToDb('ERROR', `Backend trigger failed for Job ${newJobId}: ${err.message}`);
-    });
+    
+    // Asynchronous trigger of the translation backend
+    (async () => {
+      try {
+        const headers = { 'Content-Type': 'application/json' };
+        
+        // Fetch GCP ID Token if invoking an HTTPS endpoint (GCP Cloud Run)
+        if (translatorUrl.startsWith('https://')) {
+          const idToken = await getGcpIdToken(translatorUrl);
+          if (idToken) {
+            headers['Authorization'] = `Bearer ${idToken}`;
+          }
+        }
+        
+        const res = await fetch(translatorUrl, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ job_id: newJobId })
+        });
+        
+        if (!res.ok) {
+          const errText = await res.text();
+          throw new Error(`Backend returned ${res.status}: ${errText}`);
+        }
+        console.log(`Successfully triggered backend translation for Job ${newJobId}`);
+      } catch (err) {
+        console.error(`Failed to trigger translation backend for Job ${newJobId}:`, err.message);
+        await logToDb('ERROR', `Backend trigger failed for Job ${newJobId}: ${err.message}`);
+      }
+    })();
 
     res.json({ success: true, job_id: newJobId });
   } catch (err) {
@@ -426,6 +541,32 @@ async function updateConfigInGcs(fileName, content) {
   await logToDb('INFO', `Updated GCS config file: ${fileName}`);
 }
 
+// Get list of models (accessible by any logged in user)
+app.get('/api/models', authenticateToken, async (req, res) => {
+  try {
+    let content = "";
+    try {
+      const [contents] = await storage.bucket(CONFIG_BUCKET).file('translation_config.md').download();
+      content = contents.toString('utf8');
+    } catch (err) {
+      content = `# Translation Configuration\n\n- **Model**: gemini-3.5-flash, gemini-3.1-pro, gemini-3.1-flash\n- **Supported Languages**: Spanish, English, French, Portuguese, German\n- **Translation Knowledge Base CSV**: translation_corpus.csv\n- **Do Not Translate CSV**: do_not_translate.csv\n`;
+    }
+    
+    // Parse model list using regex (matches - **Model**: values)
+    const modelMatch = content.match(/-\s+\*\*Model\*\*:\s*(.*)/i);
+    if (modelMatch) {
+      const modelsStr = modelMatch[1].trim();
+      const modelsList = modelsStr.split(',').map(m => m.trim()).filter(m => m);
+      res.json({ models: modelsList });
+    } else {
+      res.json({ models: ["gemini-3.5-flash", "gemini-3.1-pro", "gemini-3.1-flash"] });
+    }
+  } catch (err) {
+    console.error('Error fetching models:', err);
+    res.json({ models: ["gemini-3.5-flash", "gemini-3.1-pro", "gemini-3.1-flash"] });
+  }
+});
+
 // 5. Get Configs
 app.get('/api/admin/config', authenticateToken, requireRole(['admin']), async (req, res) => {
   try {
@@ -443,9 +584,8 @@ app.post('/api/admin/config', authenticateToken, requireRole(['admin']), async (
   const { content } = req.body;
   if (!content) return res.status(400).json({ error: 'Config content required' });
   try {
-    // Update both translation_config.md and configuration.md
+    // Update translation_config.md
     await updateConfigInGcs('translation_config.md', content);
-    await updateConfigInGcs('configuration.md', content);
     res.json({ success: true });
   } catch (err) {
     await logToDb('ERROR', `Failed to update configuration: ${err.message}`);

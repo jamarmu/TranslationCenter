@@ -1,0 +1,28 @@
+steps:
+- name: 'ubuntu'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    # Install MariaDB/MySQL client and wget
+    apt-get update && apt-get install -y mariadb-client wget
+    
+    # Download Cloud SQL Auth Proxy
+    wget https://storage.googleapis.com/cloud-sql-connectors/cloud-sql-proxy/v2.11.0/cloud-sql-proxy.linux.amd64 -O cloud-sql-proxy
+    chmod +x cloud-sql-proxy
+    
+    # Start proxy in background
+    ./cloud-sql-proxy californiahotel:us-central1:californiahotel-mysql-instance --port 3306 &
+    
+    # Wait for proxy to start
+    sleep 5
+    
+    # Grant all privileges to 'root'@'%' with SSL disabled
+    mysql -h 127.0.0.1 -u root -p'123DB' --ssl=FALSE -e "GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION; FLUSH PRIVILEGES;"
+    
+    # Initialize the database schema
+    mysql -h 127.0.0.1 -u root -p'123DB' --ssl=FALSE translation_center < database/schema.sql
+    
+    # Verify the schema tables were created
+    echo "Tables in translation_center database:"
+    mysql -h 127.0.0.1 -u root -p'123DB' --ssl=FALSE translation_center -e "SHOW TABLES;"

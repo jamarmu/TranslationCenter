@@ -20,11 +20,11 @@ You must strictly adhere to the provided reference materials. Accuracy and fidel
 4. **Uncertainty Handling:** If a sentence is ambiguous or cannot be translated accurately using the provided corpus and standard language rules, translate it as literally and neutrally as possible. Never invent a creative interpretation to fill a gap.
 5. **Formatting:** Preserve the original formatting (markdown, paragraphs, bullet points, etc.) of the source document exactly.
 
+### OUTPUT INSTRUCTIONS
+Provide ONLY the final translated text inside a <translated_document> tag. Do not include any introductory remarks, explanations, notes, or conversational filler. Your entire response should be the translation.
+
 ### DOCUMENT TO TRANSLATE
 
 <source_document>
 [Paste the document text you want translated here]
 </source_document>
-
-### OUTPUT INSTRUCTIONS
-Provide ONLY the final translated text inside a <translated_document> tag. Do not include any introductory remarks, explanations, notes, or conversational filler. Your entire response should be the translation.

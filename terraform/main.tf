@@ -55,6 +55,31 @@ resource "google_storage_bucket" "config_files" {
   depends_on                  = [google_project_service.apis]
 }
 
+# --- Google Cloud Storage Bucket Objects (Configurations) ---
+resource "google_storage_bucket_object" "translation_prompt" {
+  name   = "translation_prompt.md"
+  bucket = google_storage_bucket.config_files.name
+  source = "${path.module}/../config_init/translation_prompt.md"
+}
+
+resource "google_storage_bucket_object" "translation_corpus" {
+  name   = "translation_corpus.csv"
+  bucket = google_storage_bucket.config_files.name
+  source = "${path.module}/../config_init/translation_corpus.csv"
+}
+
+resource "google_storage_bucket_object" "do_not_translate" {
+  name   = "do_not_translate.csv"
+  bucket = google_storage_bucket.config_files.name
+  source = "${path.module}/../config_init/do_not_translate.csv"
+}
+
+resource "google_storage_bucket_object" "translation_config" {
+  name   = "translation_config.md"
+  bucket = google_storage_bucket.config_files.name
+  source = "${path.module}/../config_init/translation_config.md"
+}
+
 # --- Managed Cloud SQL MySQL Database ---
 resource "google_sql_database_instance" "mysql" {
   name             = "${var.project_id}-mysql-instance"
@@ -127,6 +152,11 @@ resource "google_cloud_run_service" "backend" {
   location = var.region
 
   template {
+    metadata {
+      annotations = {
+        "run.googleapis.com/cloudsql-instances" = google_sql_database_instance.mysql.connection_name
+      }
+    }
     spec {
       service_account_name = google_service_account.run_sa.email
       containers {
@@ -152,6 +182,14 @@ resource "google_cloud_run_service" "backend" {
           name  = "GCP_PROJECT"
           value = var.project_id
         }
+        env {
+          name  = "GCP_REGION"
+          value = var.region
+        }
+        env {
+          name  = "DB_SOCKET_PATH"
+          value = "/cloudsql/${google_sql_database_instance.mysql.connection_name}"
+        }
       }
     }
   }
@@ -175,6 +213,11 @@ resource "google_cloud_run_service" "frontend" {
   location = var.region
 
   template {
+    metadata {
+      annotations = {
+        "run.googleapis.com/cloudsql-instances" = google_sql_database_instance.mysql.connection_name
+      }
+    }
     spec {
       service_account_name = google_service_account.run_sa.email
       containers {
@@ -207,6 +250,10 @@ resource "google_cloud_run_service" "frontend" {
         env {
           name  = "TRANSLATION_BACKEND_URL"
           value = "${google_cloud_run_service.backend.status[0].url}/translate"
+        }
+        env {
+          name  = "DB_SOCKET_PATH"
+          value = "/cloudsql/${google_sql_database_instance.mysql.connection_name}"
         }
       }
     }

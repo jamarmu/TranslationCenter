@@ -8,22 +8,31 @@ load_dotenv()
 
 def get_db_connection():
     try:
-        conn = mysql.connector.connect(
-            host=os.getenv("DB_HOST", "localhost"),
-            user=os.getenv("DB_USER", "root"),
-            password=os.getenv("DB_PASSWORD", "password"),
-            database=os.getenv("DB_NAME", "translation_center"),
-            port=int(os.getenv("DB_PORT", 3306))
-        )
+        connection_args = {
+            "user": os.getenv("DB_USER", "root"),
+            "password": os.getenv("DB_PASSWORD", "password"),
+            "database": os.getenv("DB_NAME", "translation_center"),
+        }
+        
+        socket_path = os.getenv("DB_SOCKET_PATH")
+        if socket_path:
+            connection_args["unix_socket"] = socket_path
+        else:
+            connection_args["host"] = os.getenv("DB_HOST", "localhost")
+            connection_args["port"] = int(os.getenv("DB_PORT", 3306))
+            
+        conn = mysql.connector.connect(**connection_args)
         return conn
     except Exception as e:
         print(f"Database connection error: {e}", file=sys.stderr)
         return None
 
 def log_event(severity, message):
+    # Always print to stderr for Cloud Run logging
+    print(f"[{severity}] {message}", file=sys.stderr)
+    sys.stderr.flush()
     conn = get_db_connection()
     if not conn:
-        print(f"[{severity}] DB Offline: {message}", file=sys.stderr)
         return
     try:
         cursor = conn.cursor()
