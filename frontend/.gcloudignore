@@ -1,0 +1,17 @@
+.git/
+.gitignore
+node_modules/
+frontend/node_modules/
+backend/venv/
+backend/.venv/
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+.DS_Store
+*.log
+build/
+.tmp/
+uploads/
+# Do not ignore dist/ here because Dockerfile needs to copy the compiled build output!
+# dist/

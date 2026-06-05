@@ -1,0 +1,17 @@
+[
+  {
+    "username": "user1",
+    "password_hash": "$2b$10$RE88WCNPbXer0vb29D9q2.t0Jgwn2/y1Sf5mzg/GKn9jFCJQ.rhOC",
+    "role": "user"
+  },
+  {
+    "username": "user2",
+    "password_hash": "$2b$10$RE88WCNPbXer0vb29D9q2.t0Jgwn2/y1Sf5mzg/GKn9jFCJQ.rhOC",
+    "role": "viewer"
+  },
+  {
+    "username": "admin1",
+    "password_hash": "$2b$10$RE88WCNPbXer0vb29D9q2.t0Jgwn2/y1Sf5mzg/GKn9jFCJQ.rhOC",
+    "role": "admin"
+  }
+]
