@@ -22,8 +22,8 @@ Use at you own risk.
 Use files under the terraform folder to create the relevant services in a GCP project:
 
 Enable the following APIs for the project:
-- Cloud Resource Manager API 
-- Identity and Access Management (IAM) API
+  - Cloud Resource Manager API 
+  - Identity and Access Management (IAM) API
 
 ```bash
 cd terraform
