@@ -21,10 +21,15 @@ Use at you own risk.
 
 Use files under the terraform folder to create the relevant services in a GCP project:
 
+Enable the following APIs for the project:
+  - Cloud Resource Manager API 
+  - Identity and Access Management (IAM) API
+
+```bash
 cd terraform
 terraform init
 terraform apply -var="project_id=CHANGE_ME" -var="db_password=..." -var="jwt_secret=YOUR_SECURE_PRODUCTION_JWT_SECRET"
-
+```
 
 ---
 
