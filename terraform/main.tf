@@ -5,6 +5,10 @@ terraform {
       source  = "hashicorp/google"
       version = "~> 5.0"
     }
+    null = {
+      source  = "hashicorp/null"
+      version = "~> 3.0"
+    }
   }
 }
 
@@ -21,10 +25,65 @@ resource "google_project_service" "apis" {
     "storage.googleapis.com",
     "aiplatform.googleapis.com",
     "drive.googleapis.com",
-    "docs.googleapis.com"
+    "docs.googleapis.com",
+    "artifactregistry.googleapis.com",
+    "cloudbuild.googleapis.com"
   ])
   service            = each.key
   disable_on_destroy = false
+}
+
+# --- Artifact Registry Docker Repository ---
+resource "google_artifact_registry_repository" "translation_repo" {
+  location      = var.region
+  repository_id = "translation-repo"
+  description   = "Docker repository for Translation Center microservices"
+  format        = "DOCKER"
+  depends_on    = [google_project_service.apis]
+}
+
+# --- Build and Push Docker Images using Cloud Build ---
+resource "null_resource" "build_backend" {
+  triggers = {
+    main_py          = filesha1("${path.module}/../backend/main.py")
+    translator_py    = filesha1("${path.module}/../backend/translator.py")
+    db_py            = filesha1("${path.module}/../backend/db.py")
+    dockerfile       = filesha1("${path.module}/../backend/Dockerfile")
+    requirements_txt = filesha1("${path.module}/../backend/requirements.txt")
+  }
+
+  provisioner "local-exec" {
+    command = "gcloud builds submit --tag ${var.region}-docker.pkg.dev/${var.project_id}/${google_artifact_registry_repository.translation_repo.repository_id}/translation-backend:latest ${path.module}/../backend --project ${var.project_id}"
+  }
+
+  depends_on = [
+    google_project_service.apis,
+    google_artifact_registry_repository.translation_repo
+  ]
+}
+
+resource "null_resource" "build_frontend" {
+  triggers = {
+    package_json      = filesha1("${path.module}/../frontend/package.json")
+    package_lock_json = filesha1("${path.module}/../frontend/package-lock.json")
+    server_js         = filesha1("${path.module}/../frontend/server.js")
+    users_json        = filesha1("${path.module}/../frontend/users.json")
+    dockerfile        = filesha1("${path.module}/../frontend/Dockerfile")
+    vite_config       = filesha1("${path.module}/../frontend/vite.config.js")
+    index_html        = filesha1("${path.module}/../frontend/index.html")
+    app_jsx           = filesha1("${path.module}/../frontend/src/App.jsx")
+    index_css         = filesha1("${path.module}/../frontend/src/index.css")
+    main_jsx          = filesha1("${path.module}/../frontend/src/main.jsx")
+  }
+
+  provisioner "local-exec" {
+    command = "gcloud builds submit --tag ${var.region}-docker.pkg.dev/${var.project_id}/${google_artifact_registry_repository.translation_repo.repository_id}/translation-frontend:latest ${path.module}/../frontend --project ${var.project_id}"
+  }
+
+  depends_on = [
+    google_project_service.apis,
+    google_artifact_registry_repository.translation_repo
+  ]
 }
 
 # --- Google Cloud Storage Buckets ---
@@ -160,7 +219,7 @@ resource "google_cloud_run_service" "backend" {
     spec {
       service_account_name = google_service_account.run_sa.email
       containers {
-        image = "${var.region}-docker.pkg.dev/${var.project_id}/translation-repo/translation-backend:latest"
+        image = "${var.region}-docker.pkg.dev/${var.project_id}/${google_artifact_registry_repository.translation_repo.repository_id}/translation-backend:latest"
         
         env {
           name  = "DB_HOST"
@@ -203,7 +262,8 @@ resource "google_cloud_run_service" "backend" {
     google_sql_database_instance.mysql,
     google_storage_bucket.input_files,
     google_storage_bucket.output_files,
-    google_storage_bucket.config_files
+    google_storage_bucket.config_files,
+    null_resource.build_backend
   ]
 }
 
@@ -221,7 +281,7 @@ resource "google_cloud_run_service" "frontend" {
     spec {
       service_account_name = google_service_account.run_sa.email
       containers {
-        image = "${var.region}-docker.pkg.dev/${var.project_id}/translation-repo/translation-frontend:latest"
+        image = "${var.region}-docker.pkg.dev/${var.project_id}/${google_artifact_registry_repository.translation_repo.repository_id}/translation-frontend:latest"
 
         env {
           name  = "DB_HOST"
@@ -264,7 +324,10 @@ resource "google_cloud_run_service" "frontend" {
     latest_revision = true
   }
 
-  depends_on = [google_cloud_run_service.backend]
+  depends_on = [
+    google_cloud_run_service.backend,
+    null_resource.build_frontend
+  ]
 }
 
 # --- Make frontend public ---
