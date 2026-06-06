@@ -19,7 +19,7 @@ Use at you own risk.
 
 ## Deploy instructions
 
-Clone this repo to your machine our cloud shell and user terraform to deploy to GCP.
+Clone this repo to your machine our cloud shell and use terraform to deploy to GCP.
 
 Enable the following APIs for the project:
   - Cloud Resource Manager API 
