@@ -24,7 +24,7 @@ Create a `.env` file in this directory for local execution:
 ```env
 PORT=8080
 JWT_SECRET=translation-center-secret
-GCP_PROJECT=translation-center-project
+GCP_PROJECT=YOUR_GCP_PROJECT_ID
 DB_HOST=127.0.0.1
 DB_USER=root
 DB_PASSWORD=password

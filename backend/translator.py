@@ -14,7 +14,9 @@ from google.oauth2 import service_account
 from db import log_event, log_tokens, update_job_status, get_job
 
 # Load environment variables
-GCP_PROJECT = os.getenv("GCP_PROJECT", "translation-center")
+GCP_PROJECT = os.getenv("GCP_PROJECT")
+if not GCP_PROJECT:
+    raise RuntimeError("GCP_PROJECT environment variable is required but not set.")
 GCP_REGION = os.getenv("GCP_REGION", "us-central1")
 VERTEX_AI_LOCATION = "global"
 CONFIG_BUCKET = f"{GCP_PROJECT}_translation_config"

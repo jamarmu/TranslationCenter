@@ -466,6 +466,7 @@ function NewJobModal({ token, onClose, fetchJobs, showError, showSuccess }) {
   const [loading, setLoading] = useState(false);
   const [verbose, setVerbose] = useState(false);
   const [availableModels, setAvailableModels] = useState([]);
+  const [gcpProjectId, setGcpProjectId] = useState('');
 
   useEffect(() => {
     const fetchModels = async () => {
@@ -483,7 +484,23 @@ function NewJobModal({ token, onClose, fetchJobs, showError, showSuccess }) {
         console.error('Failed to fetch models:', err);
       }
     };
+    const fetchProjectInfo = async () => {
+      try {
+        const res = await fetch('/api/project-info', {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.project_id) {
+            setGcpProjectId(data.project_id);
+          }
+        }
+      } catch (err) {
+        console.error('Failed to fetch project info:', err);
+      }
+    };
     fetchModels();
+    fetchProjectInfo();
   }, [token]);
 
   const handleSubmit = async (e) => {
@@ -625,7 +642,7 @@ function NewJobModal({ token, onClose, fetchJobs, showError, showSuccess }) {
                   onChange={(e) => setDestDriveUrl(e.target.value)}
                 />
                 <p style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '6px', lineHeight: '1.4' }}>
-                  <strong>Reminder:</strong> Make sure you share this destination Google Doc with Editor access to <code style={{ background: 'var(--panel-border)', padding: '2px 4px', borderRadius: '4px' }}>translation-center-sa@californiahotel.iam.gserviceaccount.com</code> so the app has write permissions.
+                  <strong>Reminder:</strong> Make sure you share this destination Google Doc with Editor access to <code style={{ background: 'var(--panel-border)', padding: '2px 4px', borderRadius: '4px' }}>{`translation-center-sa@${gcpProjectId || '[GCP_PROJECT]'}.iam.gserviceaccount.com`}</code> so the app has write permissions.
                 </p>
               </div>
             )}

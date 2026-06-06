@@ -12,7 +12,10 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 8080;
 const JWT_SECRET = process.env.JWT_SECRET || 'translation-center-secret';
-const GCP_PROJECT = process.env.GCP_PROJECT || 'translation-center';
+const GCP_PROJECT = process.env.GCP_PROJECT;
+if (!GCP_PROJECT) {
+  throw new Error("GCP_PROJECT environment variable is required but not set.");
+}
 
 // Storage Buckets Setup
 const INPUT_BUCKET = `${GCP_PROJECT}_translation_input_files`;
@@ -620,6 +623,11 @@ app.post('/api/admin/prompt', authenticateToken, requireRole(['admin']), async (
     await logToDb('ERROR', `Failed to update prompt: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
+});
+
+// 9. Get Project Info
+app.get('/api/project-info', authenticateToken, (req, res) => {
+  res.json({ project_id: GCP_PROJECT });
 });
 
 // Fallback to React index.html for SPA routes
