@@ -61,7 +61,8 @@ resource "null_resource" "build_backend" {
     google_artifact_registry_repository.translation_repo,
     google_storage_bucket.config_files,
     google_project_iam_member.compute_storage_viewer,
-    google_project_iam_member.compute_artifact_writer
+    google_project_iam_member.compute_artifact_writer,
+    google_project_iam_member.deployer_sa_user
   ]
 }
 
@@ -88,7 +89,8 @@ resource "null_resource" "build_frontend" {
     google_artifact_registry_repository.translation_repo,
     google_storage_bucket.config_files,
     google_project_iam_member.compute_storage_viewer,
-    google_project_iam_member.compute_artifact_writer
+    google_project_iam_member.compute_artifact_writer,
+    google_project_iam_member.deployer_sa_user
   ]
 }
 
@@ -368,5 +370,16 @@ resource "google_project_iam_member" "compute_artifact_writer" {
   project    = var.project_id
   role       = "roles/artifactregistry.writer"
   member     = "serviceAccount:${data.google_project.project.number}-compute@developer.gserviceaccount.com"
+  depends_on = [google_project_service.apis]
+}
+
+# --- Retrieve active deployer credentials email dynamically ---
+data "google_client_openid_userinfo" "me" {}
+
+# --- Grant active deployer Service Account User permission dynamically ---
+resource "google_project_iam_member" "deployer_sa_user" {
+  project    = var.project_id
+  role       = "roles/iam.serviceAccountUser"
+  member     = endswith(data.google_client_openid_userinfo.me.email, ".gserviceaccount.com") ? "serviceAccount:${data.google_client_openid_userinfo.me.email}" : "user:${data.google_client_openid_userinfo.me.email}"
   depends_on = [google_project_service.apis]
 }
