@@ -65,6 +65,10 @@ async function getDb() {
     // Test connection
     const conn = await dbPool.getConnection();
     conn.release();
+    
+    // Automatically initialize schema tables if they don't exist
+    await initDbSchema(dbPool);
+    
     return dbPool;
   } catch (err) {
     console.error('Database connection failed:', err.message);
@@ -72,6 +76,57 @@ async function getDb() {
     if (err.message.indexOf('Database connection failed') === -1) {
       logToDb('ERROR', `Database connection failed: ${err.message}`).catch(() => {});
     }
+    throw err;
+  }
+}
+
+async function initDbSchema(pool) {
+  try {
+    const createJobsTable = `
+      CREATE TABLE IF NOT EXISTS jobs (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        job_name VARCHAR(255) NOT NULL,
+        model_override VARCHAR(100) NULL,
+        model_used VARCHAR(100) NOT NULL,
+        source_lang VARCHAR(50) NOT NULL,
+        target_lang VARCHAR(50) NOT NULL,
+        status VARCHAR(50) NOT NULL,
+        source_file_path VARCHAR(1024) NOT NULL,
+        candidate_file_path VARCHAR(1024) NULL,
+        output_file_path VARCHAR(1024) NULL,
+        file_type VARCHAR(50) NOT NULL,
+        storage_type VARCHAR(50) NOT NULL,
+        verbose BOOLEAN NOT NULL DEFAULT FALSE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+      )
+    `;
+
+    const createUsageLogsTable = `
+      CREATE TABLE IF NOT EXISTS usage_logs (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        job_id INT NOT NULL,
+        tokens_consumed INT NOT NULL,
+        date DATE NOT NULL,
+        FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
+      )
+    `;
+
+    const createAppLogsTable = `
+      CREATE TABLE IF NOT EXISTS app_logs (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        severity VARCHAR(50) NOT NULL,
+        message TEXT NOT NULL,
+        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `;
+
+    await pool.query(createJobsTable);
+    await pool.query(createUsageLogsTable);
+    await pool.query(createAppLogsTable);
+    console.log("Database schema tables successfully initialized/checked.");
+  } catch (err) {
+    console.error("Failed to initialize database schema tables:", err.message);
     throw err;
   }
 }
