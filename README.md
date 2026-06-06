@@ -25,6 +25,8 @@ Enable the following APIs for the project:
   - Cloud Resource Manager API 
   - Identity and Access Management (IAM) API
 
+Services will be deployed in 2 Cloud Run instances + SQL database + 3 Storage Buckets.
+
 ```bash
 cd terraform
 terraform init
@@ -33,54 +35,38 @@ terraform apply -var="project_id=CHANGE_ME" -var="db_password=..." -var="jwt_sec
 
 ---
 
-## Directory Mappings
+## Directory Structure
 
-- [database/](file:///TranslationCenter/database/README.md): MySQL schema scripts.
-  - [database/schema.sql](file:///TranslationCenter/database/schema.sql)
-- [frontend/](file:///TranslationCenter/frontend/README.md): Vite React + Express server API code.
-  - [frontend/server.js](file:///TranslationCenter/frontend/server.js)
-  - [frontend/users.json](file:///TranslationCenter/frontend/users.json)
-  - [frontend/src/App.jsx](file:///TranslationCenter/frontend/src/App.jsx)
-  - [frontend/src/index.css](file:///TranslationCenter/frontend/src/index.css)
-- [backend/](file:///TranslationCenter/backend/README.md): Python FastAPI translator microservice.
-  - [backend/main.py](file:///TranslationCenter/backend/main.py)
-  - [backend/translator.py](file:///TranslationCenter/backend/translator.py)
-- [terraform/](file:///TranslationCenter/terraform/README.md): Infrastructure deployment scripts.
-  - [terraform/main.tf](file:///TranslationCenter/terraform/main.tf)
-- [config_init/](file:///TranslationCenter/config_init/): Initialization files for translation config.
-  - [config_init/translation_corpus.csv](file:///TranslationCenter/config_init/translation_corpus.csv)
-  - [config_init/do_not_translate.csv](file:///TranslationCenter/config_init/do_not_translate.csv)
-
----
-
-## Local Development Guide
-
-To run the full stack locally for development:
-
-### Prerequisite 1: Initialize Database
-Set up a local MySQL instance and run:
-```bash
-mysql -u root -p -e "source database/schema.sql"
-```
-
-### Prerequisite 2: Environment Variables
-Create `.env` configuration files inside `frontend/` and `backend/` directories mapping your database credentials, Google Cloud service credentials, and Gemini API keys. (See the respective README files for details).
-
-### Start Frontend Gateway
-```bash
-cd frontend
-npm install
-npm run build # Build React SPA bundle
-npm start     # Runs Express server at http://localhost:8080
-```
-
-### Start Translation Backend
-In another terminal:
-```bash
-cd backend
-python -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-python main.py # Runs FastAPI server at http://localhost:5000
-```
-Now, navigate your browser to `http://localhost:8080` to access Translation Center!
+- [database/](file:///Users/jamarmu/Workdir/Antigravity/TranslationCenter/database): Contains MySQL schema scripts.
+  - [database/README.md](file:///Users/jamarmu/Workdir/Antigravity/TranslationCenter/database/README.md): Documentation on MySQL schema structure and queries.
+  - [database/schema.sql](file:///Users/jamarmu/Workdir/Antigravity/TranslationCenter/database/schema.sql): Database initialization script for tables (jobs, usage_logs, app_logs).
+- [frontend/](file:///Users/jamarmu/Workdir/Antigravity/TranslationCenter/frontend): Codebase for Express API gateway and Vite React SPA application.
+  - [frontend/README.md](file:///Users/jamarmu/Workdir/Antigravity/TranslationCenter/frontend/README.md): Detail on environment configuration and script commands.
+  - [frontend/package.json](file:///Users/jamarmu/Workdir/Antigravity/TranslationCenter/frontend/package.json): Frontend application dependency settings.
+  - [frontend/vite.config.js](file:///Users/jamarmu/Workdir/Antigravity/TranslationCenter/frontend/vite.config.js): Build configurations for the React single-page application.
+  - [frontend/index.html](file:///Users/jamarmu/Workdir/Antigravity/TranslationCenter/frontend/index.html): HTML page mount.
+  - [frontend/server.js](file:///Users/jamarmu/Workdir/Antigravity/TranslationCenter/frontend/server.js): Express gateway server coordinating API requests, sessions, database updates, and GCS proxying.
+  - [frontend/users.json](file:///Users/jamarmu/Workdir/Antigravity/TranslationCenter/frontend/users.json): Configured usernames, roles, and hashed passwords.
+  - [frontend/Dockerfile](file:///Users/jamarmu/Workdir/Antigravity/TranslationCenter/frontend/Dockerfile): Container build instructions for frontend service.
+  - [frontend/src/](file:///Users/jamarmu/Workdir/Antigravity/TranslationCenter/frontend/src): React component folder.
+    - [frontend/src/App.jsx](file:///Users/jamarmu/Workdir/Antigravity/TranslationCenter/frontend/src/App.jsx): Core React dashboard UI handling document uploads, translations review, status, and analytics.
+    - [frontend/src/index.css](file:///Users/jamarmu/Workdir/Antigravity/TranslationCenter/frontend/src/index.css): Styling themes, transitions, grid setups, and custom components.
+    - [frontend/src/main.jsx](file:///Users/jamarmu/Workdir/Antigravity/TranslationCenter/frontend/src/main.jsx): React runtime entry script.
+- [backend/](file:///Users/jamarmu/Workdir/Antigravity/TranslationCenter/backend): Python FastAPI translation service.
+  - [backend/README.md](file:///Users/jamarmu/Workdir/Antigravity/TranslationCenter/backend/README.md): Details on Python translation pipelines and Gemini block rendering.
+  - [backend/requirements.txt](file:///Users/jamarmu/Workdir/Antigravity/TranslationCenter/backend/requirements.txt): Python dependency lists.
+  - [backend/Dockerfile](file:///Users/jamarmu/Workdir/Antigravity/TranslationCenter/backend/Dockerfile): Container deployment configuration for the translation worker.
+  - [backend/main.py](file:///Users/jamarmu/Workdir/Antigravity/TranslationCenter/backend/main.py): FastAPI app router entry hosting /translate webhook calls.
+  - [backend/translator.py](file:///Users/jamarmu/Workdir/Antigravity/TranslationCenter/backend/translator.py): Layout block parser, Gemini client, and PDF overlay generator.
+  - [backend/db.py](file:///Users/jamarmu/Workdir/Antigravity/TranslationCenter/backend/db.py): MySQL database adapter helper routines.
+- [terraform/](file:///Users/jamarmu/Workdir/Antigravity/TranslationCenter/terraform): Google Cloud Platform Terraform deployment configurations.
+  - [terraform/README.md](file:///Users/jamarmu/Workdir/Antigravity/TranslationCenter/terraform/README.md): Detailed infrastructure provisioning deployment guide.
+  - [terraform/main.tf](file:///Users/jamarmu/Workdir/Antigravity/TranslationCenter/terraform/main.tf): Resource declarations (Cloud SQL, Cloud Run, GCS Buckets, and service integrations).
+  - [terraform/variables.tf](file:///Users/jamarmu/Workdir/Antigravity/TranslationCenter/terraform/variables.tf): Variable declarations (project IDs, regions, secrets).
+  - [terraform/outputs.tf](file:///Users/jamarmu/Workdir/Antigravity/TranslationCenter/terraform/outputs.tf): Resource values printed upon completion.
+- [config_init/](file:///Users/jamarmu/Workdir/Antigravity/TranslationCenter/config_init): Preset parameters to configure default translation profiles.
+  - [config_init/translation_prompt.md](file:///Users/jamarmu/Workdir/Antigravity/TranslationCenter/config_init/translation_prompt.md): System prompt guidelines instructing the model.
+  - [config_init/translation_corpus.csv](file:///Users/jamarmu/Workdir/Antigravity/TranslationCenter/config_init/translation_corpus.csv): Pre-approved terms list.
+  - [config_init/do_not_translate.csv](file:///Users/jamarmu/Workdir/Antigravity/TranslationCenter/config_init/do_not_translate.csv): Words/acronyms to bypass translation.
+  - [config_init/translation_config.md](file:///Users/jamarmu/Workdir/Antigravity/TranslationCenter/config_init/translation_config.md): Default setup configuration parameters.
+- [architecture.png](file:///Users/jamarmu/Workdir/Antigravity/TranslationCenter/architecture.png): Architecture flow design graphic.
