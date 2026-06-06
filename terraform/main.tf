@@ -60,7 +60,8 @@ resource "null_resource" "build_backend" {
     google_project_service.apis,
     google_artifact_registry_repository.translation_repo,
     google_storage_bucket.config_files,
-    google_project_iam_member.compute_storage_viewer
+    google_project_iam_member.compute_storage_viewer,
+    google_project_iam_member.compute_artifact_writer
   ]
 }
 
@@ -86,7 +87,8 @@ resource "null_resource" "build_frontend" {
     google_project_service.apis,
     google_artifact_registry_repository.translation_repo,
     google_storage_bucket.config_files,
-    google_project_iam_member.compute_storage_viewer
+    google_project_iam_member.compute_storage_viewer,
+    google_project_iam_member.compute_artifact_writer
   ]
 }
 
@@ -357,6 +359,14 @@ data "google_project" "project" {}
 resource "google_project_iam_member" "compute_storage_viewer" {
   project    = var.project_id
   role       = "roles/storage.objectViewer"
+  member     = "serviceAccount:${data.google_project.project.number}-compute@developer.gserviceaccount.com"
+  depends_on = [google_project_service.apis]
+}
+
+# --- Grant Compute Service Account Artifact Registry writer permission for Cloud Build ---
+resource "google_project_iam_member" "compute_artifact_writer" {
+  project    = var.project_id
+  role       = "roles/artifactregistry.writer"
   member     = "serviceAccount:${data.google_project.project.number}-compute@developer.gserviceaccount.com"
   depends_on = [google_project_service.apis]
 }
