@@ -20,3 +20,9 @@ variable "jwt_secret" {
   type        = string
   sensitive   = true
 }
+
+variable "authorized_domain" {
+  description = "The domain authorized to access the frontend service (set to empty to make public if org policies allow)"
+  type        = string
+  default     = ""
+}

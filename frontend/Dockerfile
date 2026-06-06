@@ -1,20 +1,27 @@
-# Use official Node.js runtime as parent image
+# --- Build Stage ---
+FROM node:20-slim AS builder
+
+WORKDIR /usr/src/app
+
+COPY package*.json ./
+RUN npm install
+
+COPY vite.config.js index.html ./
+COPY src ./src
+
+RUN npm run build
+
+# --- Production Stage ---
 FROM node:20-slim
 
 WORKDIR /usr/src/app
 
-# Copy package descriptors
 COPY package*.json ./
-
-# Install only production dependencies
 RUN npm install --omit=dev
 
-# Copy server entrypoints, configuration, and pre-built SPA dist folder
 COPY server.js users.json ./
-COPY dist ./dist
+COPY --from=builder /usr/src/app/dist ./dist
 
-# Expose server gateway port
 EXPOSE 8080
 
-# Run the server gateway
 CMD ["node", "server.js"]

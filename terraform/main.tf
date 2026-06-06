@@ -336,12 +336,12 @@ resource "google_cloud_run_service" "frontend" {
   ]
 }
 
-# --- Make frontend public ---
+# --- Make frontend accessible to authorized domain ---
 resource "google_cloud_run_service_iam_member" "public_frontend" {
   location = google_cloud_run_service.frontend.location
   service  = google_cloud_run_service.frontend.name
   role     = "roles/run.invoker"
-  member   = "allUsers"
+  member   = var.authorized_domain != "" ? "domain:${var.authorized_domain}" : "allUsers"
 }
 
 # --- Make backend accessible by frontend ---
