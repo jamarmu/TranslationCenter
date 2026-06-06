@@ -27,6 +27,7 @@ Enable the following APIs for the project:
 
 Services will be deployed in 2 Cloud Run instances + SQL database + 3 Storage Buckets.
 A service account will be created to run the services and call the Gemini API.
+This account will also access the Google Drive files.
 
 ```bash
 cd terraform
