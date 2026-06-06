@@ -59,7 +59,8 @@ resource "null_resource" "build_backend" {
   depends_on = [
     google_project_service.apis,
     google_artifact_registry_repository.translation_repo,
-    google_storage_bucket.config_files
+    google_storage_bucket.config_files,
+    google_project_iam_member.compute_storage_viewer
   ]
 }
 
@@ -84,7 +85,8 @@ resource "null_resource" "build_frontend" {
   depends_on = [
     google_project_service.apis,
     google_artifact_registry_repository.translation_repo,
-    google_storage_bucket.config_files
+    google_storage_bucket.config_files,
+    google_project_iam_member.compute_storage_viewer
   ]
 }
 
@@ -346,4 +348,15 @@ resource "google_cloud_run_service_iam_member" "backend_invoker" {
   service  = google_cloud_run_service.backend.name
   role     = "roles/run.invoker"
   member   = "serviceAccount:${google_service_account.run_sa.email}"
+}
+
+# --- Data source to retrieve project number ---
+data "google_project" "project" {}
+
+# --- Grant Compute Service Account storage reader permission for Cloud Build ---
+resource "google_project_iam_member" "compute_storage_viewer" {
+  project    = var.project_id
+  role       = "roles/storage.objectViewer"
+  member     = "serviceAccount:${data.google_project.project.number}-compute@developer.gserviceaccount.com"
+  depends_on = [google_project_service.apis]
 }
