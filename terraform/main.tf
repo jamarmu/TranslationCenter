@@ -166,8 +166,8 @@ resource "google_sql_database" "database" {
   instance = google_sql_database_instance.mysql.name
 }
 
-resource "google_sql_user" "root_user" {
-  name     = "root"
+resource "google_sql_user" "app_user" {
+  name     = "translation_app_user"
   instance = google_sql_database_instance.mysql.name
   password = var.db_password
 }
@@ -233,7 +233,7 @@ resource "google_cloud_run_service" "backend" {
         }
         env {
           name  = "DB_USER"
-          value = google_sql_user.root_user.name
+          value = google_sql_user.app_user.name
         }
         env {
           name  = "DB_PASSWORD"
@@ -295,7 +295,7 @@ resource "google_cloud_run_service" "frontend" {
         }
         env {
           name  = "DB_USER"
-          value = google_sql_user.root_user.name
+          value = google_sql_user.app_user.name
         }
         env {
           name  = "DB_PASSWORD"
