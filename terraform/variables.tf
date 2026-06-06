@@ -26,3 +26,9 @@ variable "authorized_domain" {
   type        = string
   default     = ""
 }
+
+variable "deployer_email" {
+  description = "The email address of the identity running the deployment (needed for Cloud Build Service Account User permission, set to empty to skip)"
+  type        = string
+  default     = ""
+}

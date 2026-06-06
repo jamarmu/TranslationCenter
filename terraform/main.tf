@@ -373,13 +373,11 @@ resource "google_project_iam_member" "compute_artifact_writer" {
   depends_on = [google_project_service.apis]
 }
 
-# --- Retrieve active deployer credentials email dynamically ---
-data "google_client_openid_userinfo" "me" {}
-
-# --- Grant active deployer Service Account User permission dynamically ---
+# --- Grant active deployer Service Account User permission dynamically if email is provided ---
 resource "google_project_iam_member" "deployer_sa_user" {
+  count      = var.deployer_email != "" ? 1 : 0
   project    = var.project_id
   role       = "roles/iam.serviceAccountUser"
-  member     = endswith(data.google_client_openid_userinfo.me.email, ".gserviceaccount.com") ? "serviceAccount:${data.google_client_openid_userinfo.me.email}" : "user:${data.google_client_openid_userinfo.me.email}"
+  member     = endswith(var.deployer_email, ".gserviceaccount.com") ? "serviceAccount:${var.deployer_email}" : "user:${var.deployer_email}"
   depends_on = [google_project_service.apis]
 }
