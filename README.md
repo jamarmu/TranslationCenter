@@ -26,6 +26,7 @@ Enable the following APIs for the project:
   - Identity and Access Management (IAM) API
 
 Services will be deployed in 2 Cloud Run instances + SQL database + 3 Storage Buckets.
+A service account will be created to run the services and call the Gemini API.
 
 ```bash
 cd terraform
