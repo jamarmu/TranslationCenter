@@ -310,6 +310,7 @@ function UserDashboard({ token, user, onLogout, showError, showSuccess }) {
                     <th>Source File</th>
                     <th>Candidate Translation</th>
                     <th>Approved Translation</th>
+                    <th>Pages</th>
                     <th>Tokens</th>
                     <th>Created At</th>
                     <th>Status</th>
@@ -359,7 +360,16 @@ function UserDashboard({ token, user, onLogout, showError, showSuccess }) {
                           )}
                         </td>
                         <td>
-                          {job.tokens_consumed > 0 ? (
+                          {job.pages_translated !== null && job.pages_translated > 0 ? (
+                            <span style={{ fontWeight: '500', color: 'var(--text-primary)' }}>
+                              {job.pages_translated}
+                            </span>
+                          ) : (
+                            <span style={{ color: '#6b7280' }}>-</span>
+                          )}
+                        </td>
+                        <td>
+                          {job.tokens_consumed > 0 && job.translation_engine !== 'translation_api' ? (
                             <span style={{ fontWeight: '500', color: 'var(--text-primary)' }}>
                               {job.tokens_consumed.toLocaleString()}
                             </span>
@@ -479,6 +489,7 @@ function NewJobModal({ token, onClose, fetchJobs, showError, showSuccess }) {
   const [verbose, setVerbose] = useState(false);
   const [availableModels, setAvailableModels] = useState([]);
   const [gcpProjectId, setGcpProjectId] = useState('');
+  const [translationEngine, setTranslationEngine] = useState('llm_pymupdf');
 
   useEffect(() => {
     const fetchModels = async () => {
@@ -528,7 +539,11 @@ function NewJobModal({ token, onClose, fetchJobs, showError, showSuccess }) {
     formData.append('source_lang', sourceLang);
     formData.append('target_lang', targetLang);
     formData.append('verbose', verbose);
-    
+    formData.append('translation_engine', translationEngine);
+    if (translationEngine === 'translation_api') {
+      formData.append('translation_tier', 'basic');
+    }
+
     if (file) {
       formData.append('file', file);
     } else {
@@ -603,14 +618,51 @@ function NewJobModal({ token, onClose, fetchJobs, showError, showSuccess }) {
           </div>
 
           <div className="form-group">
-            <label>Model Override (Optional)</label>
-            <select value={modelOverride} onChange={(e) => setModelOverride(e.target.value)}>
-              <option value="">Use Default Configured Model</option>
-              {availableModels.map((m) => (
-                <option key={m} value={m}>{m}</option>
-              ))}
-            </select>
+            <label>Translation Engine</label>
+            <div style={{ display: 'flex', gap: '12px', marginTop: '6px', marginBottom: '8px' }}>
+              <label className="radio-label" style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '10px', borderRadius: '8px', border: translationEngine === 'llm_pymupdf' ? '2px solid var(--primary)' : '1px solid var(--panel-border)', background: translationEngine === 'llm_pymupdf' ? 'rgba(59, 130, 246, 0.1)' : 'transparent', cursor: 'pointer', transition: 'all 0.2s' }}>
+                <input 
+                  type="radio" 
+                  name="translationEngine" 
+                  value="llm_pymupdf" 
+                  checked={translationEngine === 'llm_pymupdf'} 
+                  onChange={() => setTranslationEngine('llm_pymupdf')}
+                  style={{ display: 'none' }}
+                />
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px', textAlign: 'center' }}>
+                  <span style={{ fontWeight: '600', fontSize: '14px', color: 'var(--text-primary)' }}>LLM + PyMuPDF</span>
+                  <span style={{ fontSize: '11px', color: '#9ca3af' }}>Layout-preserving Gemini translation</span>
+                </div>
+              </label>
+
+              <label className="radio-label" style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '10px', borderRadius: '8px', border: translationEngine === 'translation_api' ? '2px solid var(--primary)' : '1px solid var(--panel-border)', background: translationEngine === 'translation_api' ? 'rgba(59, 130, 246, 0.1)' : 'transparent', cursor: 'pointer', transition: 'all 0.2s' }}>
+                <input 
+                  type="radio" 
+                  name="translationEngine" 
+                  value="translation_api" 
+                  checked={translationEngine === 'translation_api'} 
+                  onChange={() => setTranslationEngine('translation_api')}
+                  style={{ display: 'none' }}
+                />
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px', textAlign: 'center' }}>
+                  <span style={{ fontWeight: '600', fontSize: '14px', color: 'var(--text-primary)' }}>Cloud Translation API</span>
+                  <span style={{ fontSize: '11px', color: '#9ca3af' }}>Google Cloud Translation service</span>
+                </div>
+              </label>
+            </div>
           </div>
+
+          {translationEngine === 'llm_pymupdf' && (
+            <div className="form-group">
+              <label>Model Override (Optional)</label>
+              <select value={modelOverride} onChange={(e) => setModelOverride(e.target.value)}>
+                <option value="">Use Default Configured Model</option>
+                {availableModels.map((m) => (
+                  <option key={m} value={m}>{m}</option>
+                ))}
+              </select>
+            </div>
+          )}
 
           <div style={{ border: '1px dashed var(--panel-border)', padding: '16px', borderRadius: '8px', marginBottom: '20px' }}>
             <div className="form-group">

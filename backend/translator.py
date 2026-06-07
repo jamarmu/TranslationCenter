@@ -12,6 +12,203 @@ from google.cloud import storage
 from googleapiclient.discovery import build
 from google.oauth2 import service_account
 from db import log_event, log_tokens, update_job_status, get_job
+from google.cloud import translate_v3 as translate
+import zipfile
+import xml.etree.ElementTree as ET
+
+LANG_NAME_TO_CODE = {
+    "spanish": "es",
+    "english": "en",
+    "french": "fr",
+    "portuguese": "pt",
+    "german": "de",
+    "italian": "it",
+}
+
+def get_pdf_page_count(pdf_path):
+    try:
+        doc = fitz.open(pdf_path)
+        pages = len(doc)
+        doc.close()
+        return pages
+    except Exception as e:
+        log_event("WARNING", f"Failed to get PDF page count: {e}")
+        return 1
+
+def get_docx_page_count(docx_path):
+    try:
+        with zipfile.ZipFile(docx_path) as z:
+            if 'docProps/app.xml' in z.namelist():
+                xml_content = z.read('docProps/app.xml')
+                root = ET.fromstring(xml_content)
+                for elem in root.iter():
+                    if elem.tag.endswith('Pages') and elem.text:
+                        return int(elem.text)
+        # Fallback based on text extraction
+        char_count = 0
+        with zipfile.ZipFile(docx_path) as z:
+            if 'word/document.xml' in z.namelist():
+                xml_content = z.read('word/document.xml')
+                root = ET.fromstring(xml_content)
+                for elem in root.iter():
+                    if elem.tag.endswith('t') and elem.text:
+                        char_count += len(elem.text)
+        return max(1, char_count // 1500)
+    except Exception as e:
+        log_event("WARNING", f"Failed to get DOCX page count: {e}")
+        return 1
+
+def translate_document_with_translation_api(input_path, output_path, job):
+    try:
+        creds_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+        if creds_path and os.path.exists(creds_path):
+            creds = service_account.Credentials.from_service_account_file(creds_path)
+            client = translate.TranslationServiceClient(credentials=creds)
+        else:
+            client = translate.TranslationServiceClient()
+    except Exception as e:
+        log_event("ERROR", f"Failed to initialize TranslationServiceClient: {e}")
+        raise e
+
+    location = GCP_REGION if GCP_REGION != "global" else "us-central1"
+    parent = f"projects/{GCP_PROJECT}/locations/{location}"
+
+    with open(input_path, "rb") as document:
+        document_content = document.read()
+
+    mime_type = "application/pdf"
+    if job.get("file_type") == "gdoc" or input_path.lower().endswith(".docx"):
+        mime_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+    document_input_config = {
+        "content": document_content,
+        "mime_type": mime_type
+    }
+
+    source_lang_name = job.get("source_lang", "Spanish").lower()
+    target_lang_name = job.get("target_lang", "English").lower()
+    source_lang_code = LANG_NAME_TO_CODE.get(source_lang_name, "es")
+    target_lang_code = LANG_NAME_TO_CODE.get(target_lang_name, "en")
+
+    tier = job.get("translation_tier", "basic")
+    # The Cloud Translation API does not support the LLM model (general/translation-llm)
+    # for document translations (translate_document method).
+    # It throws "400 LLM models is not enabled for document translation."
+    # Therefore, we always fall back to the standard Neural Machine Translation model (general/nmt).
+    if tier == "advanced":
+        log_event("WARNING", "Cloud Translation API does not support LLM models (general/translation-llm) for document translation. Falling back to the standard Neural Machine Translation model (general/nmt) to translate the document.")
+    model_id = "general/nmt"
+    model_path = f"{parent}/models/{model_id}"
+
+    log_event("INFO", f"Calling Cloud Translation API ({tier}) using model {model_id} for {mime_type} from {source_lang_code} to {target_lang_code}")
+
+    request = translate.TranslateDocumentRequest(
+        parent=parent,
+        target_language_code=target_lang_code,
+        source_language_code=source_lang_code,
+        document_input_config=document_input_config,
+        model=model_path
+    )
+
+    response = client.translate_document(request=request)
+    translated_bytes = response.document_translation.byte_stream_outputs[0]
+
+    with open(output_path, "wb") as f:
+        f.write(translated_bytes)
+
+    log_event("INFO", f"Document translation completed successfully. Output written to {output_path}")
+
+def translate_google_doc_with_translation_api(drive_url, job, destination_url=None):
+    drive_service, docs_service = get_google_services()
+    if not drive_service or not docs_service:
+        raise Exception("Google APIs not authenticated or unavailable")
+        
+    cleanup_old_drive_files(drive_service)
+    
+    match = re.search(r"/document/d/([a-zA-Z0-9-_]+)", drive_url)
+    if not match:
+        raise Exception("Invalid Google Drive Document URL")
+    doc_id = match.group(1)
+    
+    doc = docs_service.documents().get(documentId=doc_id).execute()
+    doc_title = doc.get("title", "Untitled Document")
+    
+    log_event("INFO", f"Exporting source document {doc_id} to DOCX for Cloud Translation API...")
+    export_req = drive_service.files().export_media(
+        fileId=doc_id,
+        mimeType='application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    )
+    docx_bytes = export_req.execute()
+    
+    temp_docx = tempfile.NamedTemporaryFile(suffix=".docx", delete=False)
+    temp_docx.write(docx_bytes)
+    temp_docx_path = temp_docx.name
+    temp_docx.close()
+    
+    try:
+        pages_count = get_docx_page_count(temp_docx_path)
+        
+        temp_out = temp_docx_path + "_out.docx"
+        translate_document_with_translation_api(temp_docx_path, temp_out, job)
+        
+        with open(temp_out, "rb") as f:
+            translated_docx_bytes = f.read()
+            
+        if os.path.exists(temp_out):
+            os.remove(temp_out)
+    finally:
+        if os.path.exists(temp_docx_path):
+            os.remove(temp_docx_path)
+            
+    if destination_url:
+        dest_match = re.search(r"/document/d/([a-zA-Z0-9-_]+)", destination_url)
+        if not dest_match:
+            dest_doc_id = destination_url
+        else:
+            dest_doc_id = dest_match.group(1)
+            
+        log_event("INFO", f"Overwriting destination Google Doc {dest_doc_id} with translated DOCX bytes...")
+        from googleapiclient.http import MediaIoBaseUpload
+        import io
+        
+        media = MediaIoBaseUpload(
+            io.BytesIO(translated_docx_bytes),
+            mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            resumable=True
+        )
+        
+        drive_service.files().update(
+            fileId=dest_doc_id,
+            media_body=media
+        ).execute()
+        
+        return destination_url, pages_count
+    else:
+        log_event("INFO", f"Copying source document {doc_id} structure to candidate file...")
+        cand_title = f"{doc_title}_translation_candidate_{job['target_lang']}"
+        
+        copied_file = drive_service.files().copy(
+            fileId=doc_id, 
+            body={"name": cand_title}
+        ).execute()
+        target_doc_id = copied_file.get("id")
+        
+        log_event("INFO", f"Overwriting candidate Google Doc {target_doc_id} with translated DOCX bytes...")
+        from googleapiclient.http import MediaIoBaseUpload
+        import io
+        
+        media = MediaIoBaseUpload(
+            io.BytesIO(translated_docx_bytes),
+            mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            resumable=True
+        )
+        
+        drive_service.files().update(
+            fileId=target_doc_id,
+            media_body=media
+        ).execute()
+        
+        return f"https://docs.google.com/document/d/{target_doc_id}/edit", pages_count
 
 # Load environment variables
 GCP_PROJECT = os.getenv("GCP_PROJECT")
@@ -618,51 +815,81 @@ def process_translation_job(job_id):
             # Prepare Output file
             temp_out_path = temp_in_path + "_out.pdf"
             
-            # Run PDF Translation
-            tokens_used = translate_pdf_file(
-                temp_in_path, 
-                temp_out_path, 
-                job, 
-                config_settings, 
-                prompt_template
-            )
-            
-            # Upload Candidate to Output GCS bucket
-            dir_part, file_part = os.path.split(blob_name)
-            name_part, ext_part = os.path.splitext(file_part)
-            cand_filename = f"{name_part}_translation_candidate_{job['target_lang']}{ext_part}"
-            if dir_part:
-                cand_filename = f"{dir_part}/{cand_filename}"
-            cand_uri = f"gs://{OUTPUT_BUCKET}/{cand_filename}"
-            client.bucket(OUTPUT_BUCKET).blob(cand_filename).upload_from_filename(temp_out_path)
-            
-            # Cleanup local temp files
-            if os.path.exists(temp_in_path): os.remove(temp_in_path)
-            if os.path.exists(temp_out_path): os.remove(temp_out_path)
-            
-            # Log usage & update DB status
-            log_tokens(job_id, tokens_used)
-            model_to_use = job["model_override"] if job["model_override"] else config_settings["model"]
-            update_job_status(job_id, "PENDING_REVIEW", cand_uri, model_to_use)
+            if job.get("translation_engine") == "translation_api":
+                # Call Cloud Translation API
+                translate_document_with_translation_api(temp_in_path, temp_out_path, job)
+                pages_count = get_pdf_page_count(temp_in_path)
+                
+                # Upload Candidate to Output GCS bucket
+                dir_part, file_part = os.path.split(blob_name)
+                name_part, ext_part = os.path.splitext(file_part)
+                cand_filename = f"{name_part}_translation_candidate_{job['target_lang']}{ext_part}"
+                if dir_part:
+                    cand_filename = f"{dir_part}/{cand_filename}"
+                cand_uri = f"gs://{OUTPUT_BUCKET}/{cand_filename}"
+                client.bucket(OUTPUT_BUCKET).blob(cand_filename).upload_from_filename(temp_out_path)
+                
+                # Cleanup local temp files
+                if os.path.exists(temp_in_path): os.remove(temp_in_path)
+                if os.path.exists(temp_out_path): os.remove(temp_out_path)
+                
+                model_to_use = f"Cloud Translation - {job.get('translation_tier', 'basic').capitalize()}"
+                update_job_status(job_id, "PENDING_REVIEW", cand_uri, model_to_use, pages_translated=pages_count)
+            else:
+                # Run PDF Translation (LLM + PyMuPDF)
+                tokens_used = translate_pdf_file(
+                    temp_in_path, 
+                    temp_out_path, 
+                    job, 
+                    config_settings, 
+                    prompt_template
+                )
+                
+                # Upload Candidate to Output GCS bucket
+                dir_part, file_part = os.path.split(blob_name)
+                name_part, ext_part = os.path.splitext(file_part)
+                cand_filename = f"{name_part}_translation_candidate_{job['target_lang']}{ext_part}"
+                if dir_part:
+                    cand_filename = f"{dir_part}/{cand_filename}"
+                cand_uri = f"gs://{OUTPUT_BUCKET}/{cand_filename}"
+                client.bucket(OUTPUT_BUCKET).blob(cand_filename).upload_from_filename(temp_out_path)
+                
+                # Cleanup local temp files
+                if os.path.exists(temp_in_path): os.remove(temp_in_path)
+                if os.path.exists(temp_out_path): os.remove(temp_out_path)
+                
+                # Log usage & update DB status
+                log_tokens(job_id, tokens_used)
+                model_to_use = job["model_override"] if job["model_override"] else config_settings["model"]
+                update_job_status(job_id, "PENDING_REVIEW", cand_uri, model_to_use)
             
         else:
             # Google Drive URL
             drive_url = job["source_file_path"]
             if job["file_type"] == "gdoc":
                 destination_url = job.get("candidate_file_path")
-                cand_url, tokens_used = translate_google_doc(
-                    drive_url, 
-                    job, 
-                    config_settings, 
-                    prompt_template,
-                    destination_url=destination_url
-                )
-                log_tokens(job_id, tokens_used)
-                model_to_use = job["model_override"] if job["model_override"] else config_settings["model"]
-                update_job_status(job_id, "PENDING_REVIEW", cand_url, model_to_use)
+                
+                if job.get("translation_engine") == "translation_api":
+                    cand_url, pages_count = translate_google_doc_with_translation_api(
+                        drive_url, 
+                        job, 
+                        destination_url=destination_url
+                    )
+                    model_to_use = f"Cloud Translation - {job.get('translation_tier', 'basic').capitalize()}"
+                    update_job_status(job_id, "PENDING_REVIEW", cand_url, model_to_use, pages_translated=pages_count)
+                else:
+                    cand_url, tokens_used = translate_google_doc(
+                        drive_url, 
+                        job, 
+                        config_settings, 
+                        prompt_template,
+                        destination_url=destination_url
+                    )
+                    log_tokens(job_id, tokens_used)
+                    model_to_use = job["model_override"] if job["model_override"] else config_settings["model"]
+                    update_job_status(job_id, "PENDING_REVIEW", cand_url, model_to_use)
             else:
                 # PDF Google Drive download, translate local PDF, upload translated back to Drive
-                # For simplicity, download GDrive file bytes and overlay them
                 drive_service, docs_service = get_google_services()
                 if not drive_service:
                     raise Exception("Google API client credentials missing")
@@ -693,33 +920,55 @@ def process_translation_job(job_id):
                 while not done:
                     status, done = downloader.next_chunk()
                     
-                # Output filename & run translation overlay
+                # Output filename & run translation
                 temp_out_path = temp_in_path + "_out.pdf"
-                tokens_used = translate_pdf_file(
-                    temp_in_path, 
-                    temp_out_path, 
-                    job, 
-                    config_settings, 
-                    prompt_template
-                )
                 
-                # Upload candidate PDF copy back to Google Drive
-                from googleapiclient.http import MediaFileUpload
-                cand_title = f"{title.replace('.pdf', '')}_translation_candidate_{job['target_lang']}.pdf"
-                media = MediaFileUpload(temp_out_path, mimetype='application/pdf')
-                uploaded_file = drive_service.files().create(
-                    body={"name": cand_title, "mimeType": "application/pdf"},
-                    media_body=media
-                ).execute()
-                cand_url = f"https://drive.google.com/file/d/{uploaded_file.get('id')}/view"
-                
-                # Clean local temporary files
-                if os.path.exists(temp_in_path): os.remove(temp_in_path)
-                if os.path.exists(temp_out_path): os.remove(temp_out_path)
-                
-                log_tokens(job_id, tokens_used)
-                model_to_use = job["model_override"] if job["model_override"] else config_settings["model"]
-                update_job_status(job_id, "PENDING_REVIEW", cand_url, model_to_use)
+                if job.get("translation_engine") == "translation_api":
+                    translate_document_with_translation_api(temp_in_path, temp_out_path, job)
+                    pages_count = get_pdf_page_count(temp_in_path)
+                    
+                    # Upload candidate PDF copy back to Google Drive
+                    from googleapiclient.http import MediaFileUpload
+                    cand_title = f"{title.replace('.pdf', '')}_translation_candidate_{job['target_lang']}.pdf"
+                    media = MediaFileUpload(temp_out_path, mimetype='application/pdf')
+                    uploaded_file = drive_service.files().create(
+                        body={"name": cand_title, "mimeType": "application/pdf"},
+                        media_body=media
+                    ).execute()
+                    cand_url = f"https://drive.google.com/file/d/{uploaded_file.get('id')}/view"
+                    
+                    # Clean local temporary files
+                    if os.path.exists(temp_in_path): os.remove(temp_in_path)
+                    if os.path.exists(temp_out_path): os.remove(temp_out_path)
+                    
+                    model_to_use = f"Cloud Translation - {job.get('translation_tier', 'basic').capitalize()}"
+                    update_job_status(job_id, "PENDING_REVIEW", cand_url, model_to_use, pages_translated=pages_count)
+                else:
+                    tokens_used = translate_pdf_file(
+                        temp_in_path, 
+                        temp_out_path, 
+                        job, 
+                        config_settings, 
+                        prompt_template
+                    )
+                    
+                    # Upload candidate PDF copy back to Google Drive
+                    from googleapiclient.http import MediaFileUpload
+                    cand_title = f"{title.replace('.pdf', '')}_translation_candidate_{job['target_lang']}.pdf"
+                    media = MediaFileUpload(temp_out_path, mimetype='application/pdf')
+                    uploaded_file = drive_service.files().create(
+                        body={"name": cand_title, "mimeType": "application/pdf"},
+                        media_body=media
+                    ).execute()
+                    cand_url = f"https://drive.google.com/file/d/{uploaded_file.get('id')}/view"
+                    
+                    # Clean local temporary files
+                    if os.path.exists(temp_in_path): os.remove(temp_in_path)
+                    if os.path.exists(temp_out_path): os.remove(temp_out_path)
+                    
+                    log_tokens(job_id, tokens_used)
+                    model_to_use = job["model_override"] if job["model_override"] else config_settings["model"]
+                    update_job_status(job_id, "PENDING_REVIEW", cand_url, model_to_use)
                 
     except Exception as e:
         log_event("ERROR", f"Job ID {job_id} failed during translation: {e}")
