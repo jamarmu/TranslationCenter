@@ -18,6 +18,9 @@ CREATE TABLE IF NOT EXISTS jobs (
     file_type VARCHAR(50) NOT NULL, -- pdf, gdoc
     storage_type VARCHAR(50) NOT NULL, -- gcs, drive
     verbose BOOLEAN NOT NULL DEFAULT FALSE,
+    translation_engine VARCHAR(50) NOT NULL DEFAULT 'llm_pymupdf',
+    translation_tier VARCHAR(50) NULL,
+    pages_translated INT NULL DEFAULT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 );

@@ -97,6 +97,9 @@ async function initDbSchema(pool) {
         file_type VARCHAR(50) NOT NULL,
         storage_type VARCHAR(50) NOT NULL,
         verbose BOOLEAN NOT NULL DEFAULT FALSE,
+        translation_engine VARCHAR(50) NOT NULL DEFAULT 'llm_pymupdf',
+        translation_tier VARCHAR(50) NULL,
+        pages_translated INT NULL DEFAULT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
       )
@@ -124,6 +127,15 @@ async function initDbSchema(pool) {
     await pool.query(createJobsTable);
     await pool.query(createUsageLogsTable);
     await pool.query(createAppLogsTable);
+
+    // Check if new columns exist, otherwise run alter table migrations
+    const [engineCols] = await pool.query("SHOW COLUMNS FROM jobs LIKE 'translation_engine'");
+    if (engineCols.length === 0) {
+      await pool.query("ALTER TABLE jobs ADD COLUMN translation_engine VARCHAR(50) NOT NULL DEFAULT 'llm_pymupdf'");
+      await pool.query("ALTER TABLE jobs ADD COLUMN translation_tier VARCHAR(50) NULL");
+      await pool.query("ALTER TABLE jobs ADD COLUMN pages_translated INT NULL DEFAULT NULL");
+      console.log("Database migration: added translation_engine, translation_tier, and pages_translated columns to jobs table.");
+    }
     console.log("Database schema tables successfully initialized/checked.");
   } catch (err) {
     console.error("Failed to initialize database schema tables:", err.message);
@@ -301,7 +313,7 @@ app.get('/api/download', authenticateToken, async (req, res) => {
 
 // 3. Create Translation Request
 app.post('/api/jobs', authenticateToken, requireRole(['user', 'admin']), upload.single('file'), async (req, res) => {
-  const { job_name, model_override, source_lang, target_lang, drive_url, verbose, destination_url } = req.body;
+  const { job_name, model_override, source_lang, target_lang, drive_url, verbose, destination_url, translation_engine, translation_tier } = req.body;
   const file = req.file;
 
   if (!job_name || !source_lang || !target_lang) {
@@ -344,14 +356,30 @@ app.post('/api/jobs', authenticateToken, requireRole(['user', 'admin']), upload.
       fs.unlinkSync(file.path);
     }
 
-    // Determine model to use (default to flash if override not set)
-    const activeModel = model_override || 'Gemini 3.5 Flash';
+    // Determine model to use
+    let activeModel = model_override || 'Gemini 3.5 Flash';
+    if (translation_engine === 'translation_api') {
+      activeModel = `Cloud Translation - ${translation_tier === 'advanced' ? 'Advanced' : 'Basic'}`;
+    }
     const verboseVal = (verbose === 'true' || verbose === true) ? 1 : 0;
 
     const [result] = await pool.query(
-      `INSERT INTO jobs (job_name, model_override, model_used, source_lang, target_lang, status, source_file_path, candidate_file_path, file_type, storage_type, verbose) 
-       VALUES (?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?)`,
-      [job_name, model_override, activeModel, source_lang, target_lang, source_file_path, destination_url || null, file_type, storage_type, verboseVal]
+      `INSERT INTO jobs (job_name, model_override, model_used, source_lang, target_lang, status, source_file_path, candidate_file_path, file_type, storage_type, verbose, translation_engine, translation_tier) 
+       VALUES (?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        job_name,
+        model_override || null,
+        activeModel,
+        source_lang,
+        target_lang,
+        source_file_path,
+        destination_url || null,
+        file_type,
+        storage_type,
+        verboseVal,
+        translation_engine || 'llm_pymupdf',
+        translation_tier || null
+      ]
     );
 
     const newJobId = result.insertId;
@@ -426,6 +454,13 @@ app.post('/api/jobs/:id/approve', authenticateToken, requireRole(['user', 'admin
         // Copy in GCS
         await storage.bucket(bucketName).file(candFile).copy(storage.bucket(bucketName).file(finalFile));
         finalOutputPath = `gs://${bucketName}/${finalFile}`;
+        
+        // Delete candidate file from storage bucket once approved
+        try {
+          await storage.bucket(bucketName).file(candFile).delete();
+        } catch (delErr) {
+          await logToDb('WARNING', `Could not delete candidate file ${candFile}: ${delErr.message}`);
+        }
       }
     } else {
       // In Google Drive, rename/make a new copy (or backend handles it, here we assume renaming)

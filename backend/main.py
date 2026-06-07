@@ -18,6 +18,18 @@ def run_migration():
                 print("Database migration ran successfully: added verbose column.")
             else:
                 print("Database column verbose already exists.")
+
+            cursor.execute("SHOW COLUMNS FROM jobs LIKE 'translation_engine'")
+            result = cursor.fetchone()
+            if not result:
+                cursor.execute("ALTER TABLE jobs ADD COLUMN translation_engine VARCHAR(50) NOT NULL DEFAULT 'llm_pymupdf'")
+                cursor.execute("ALTER TABLE jobs ADD COLUMN translation_tier VARCHAR(50) NULL")
+                cursor.execute("ALTER TABLE jobs ADD COLUMN pages_translated INT NULL DEFAULT NULL")
+                conn.commit()
+                log_event("INFO", "Database migration: added translation_engine, translation_tier, and pages_translated columns.")
+                print("Database migration ran successfully: added translation_engine, translation_tier, and pages_translated columns.")
+            else:
+                print("Database columns for translation_engine, translation_tier, and pages_translated already exist.")
         except Exception as e:
             print(f"Migration error: {e}")
             log_event("ERROR", f"Database migration failed: {e}")

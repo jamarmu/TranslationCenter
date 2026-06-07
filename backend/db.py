@@ -66,28 +66,32 @@ def log_tokens(job_id, tokens_consumed):
     finally:
         conn.close()
 
-def update_job_status(job_id, status, candidate_file_path=None, model_used=None):
+def update_job_status(job_id, status, candidate_file_path=None, model_used=None, pages_translated=None):
     conn = get_db_connection()
     if not conn:
         print(f"DB Offline - Failed to update Job {job_id} status to {status}", file=sys.stderr)
         return
     try:
         cursor = conn.cursor()
-        if candidate_file_path and model_used:
-            cursor.execute(
-                "UPDATE jobs SET status = %s, candidate_file_path = %s, model_used = %s, updated_at = NOW() WHERE id = %s",
-                (status, candidate_file_path, model_used, job_id)
-            )
-        elif candidate_file_path:
-            cursor.execute(
-                "UPDATE jobs SET status = %s, candidate_file_path = %s, updated_at = NOW() WHERE id = %s",
-                (status, candidate_file_path, job_id)
-            )
-        else:
-            cursor.execute(
-                "UPDATE jobs SET status = %s, updated_at = NOW() WHERE id = %s",
-                (status, job_id)
-            )
+        query = "UPDATE jobs SET status = %s"
+        params = [status]
+        
+        if candidate_file_path:
+            query += ", candidate_file_path = %s"
+            params.append(candidate_file_path)
+            
+        if model_used:
+            query += ", model_used = %s"
+            params.append(model_used)
+            
+        if pages_translated is not None:
+            query += ", pages_translated = %s"
+            params.append(pages_translated)
+            
+        query += ", updated_at = NOW() WHERE id = %s"
+        params.append(job_id)
+        
+        cursor.execute(query, tuple(params))
         conn.commit()
         log_event("INFO", f"Job ID {job_id} status updated to {status}")
     except Exception as e:

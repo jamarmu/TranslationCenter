@@ -104,9 +104,9 @@ export default function App() {
         {errorMessage && <div className="alert-error">{errorMessage}</div>}
 
         {activeView === 'admin' && user.role === 'admin' ? (
-          <AdminDashboard token={token} showError={showError} showSuccess={showSuccess} />
+          <AdminDashboard token={token} onLogout={handleLogout} showError={showError} showSuccess={showSuccess} />
         ) : (
-          <UserDashboard token={token} user={user} showError={showError} showSuccess={showSuccess} />
+          <UserDashboard token={token} user={user} onLogout={handleLogout} showError={showError} showSuccess={showSuccess} />
         )}
       </main>
     </div>
@@ -199,7 +199,7 @@ function WelcomeScreen({ setToken, setUser, showError, errorMessage }) {
 /* ==========================================
    USER & VIEWER DASHBOARD
    ========================================== */
-function UserDashboard({ token, user, showError, showSuccess }) {
+function UserDashboard({ token, user, onLogout, showError, showSuccess }) {
   const [jobs, setJobs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
@@ -211,6 +211,10 @@ function UserDashboard({ token, user, showError, showSuccess }) {
       const res = await fetch('/api/jobs', {
         headers: { 'Authorization': `Bearer ${token}` }
       });
+      if (res.status === 401 || res.status === 403) {
+        onLogout();
+        return;
+      }
       if (!res.ok) throw new Error('Failed to fetch jobs');
       const data = await res.json();
       setJobs(data);
@@ -234,6 +238,10 @@ function UserDashboard({ token, user, showError, showSuccess }) {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}` }
       });
+      if (res.status === 401 || res.status === 403) {
+        onLogout();
+        return;
+      }
       if (!res.ok) {
         const error = await res.json();
         throw new Error(error.error || 'Failed to approve job');
@@ -251,6 +259,10 @@ function UserDashboard({ token, user, showError, showSuccess }) {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}` }
       });
+      if (res.status === 401 || res.status === 403) {
+        onLogout();
+        return;
+      }
       if (!res.ok) {
         const error = await res.json();
         throw new Error(error.error || 'Failed to reject job');
@@ -298,6 +310,7 @@ function UserDashboard({ token, user, showError, showSuccess }) {
                     <th>Source File</th>
                     <th>Candidate Translation</th>
                     <th>Approved Translation</th>
+                    <th>Pages</th>
                     <th>Tokens</th>
                     <th>Created At</th>
                     <th>Status</th>
@@ -347,7 +360,16 @@ function UserDashboard({ token, user, showError, showSuccess }) {
                           )}
                         </td>
                         <td>
-                          {job.tokens_consumed > 0 ? (
+                          {job.pages_translated !== null && job.pages_translated > 0 ? (
+                            <span style={{ fontWeight: '500', color: 'var(--text-primary)' }}>
+                              {job.pages_translated}
+                            </span>
+                          ) : (
+                            <span style={{ color: '#6b7280' }}>-</span>
+                          )}
+                        </td>
+                        <td>
+                          {job.tokens_consumed > 0 && job.translation_engine !== 'translation_api' ? (
                             <span style={{ fontWeight: '500', color: 'var(--text-primary)' }}>
                               {job.tokens_consumed.toLocaleString()}
                             </span>
@@ -467,6 +489,7 @@ function NewJobModal({ token, onClose, fetchJobs, showError, showSuccess }) {
   const [verbose, setVerbose] = useState(false);
   const [availableModels, setAvailableModels] = useState([]);
   const [gcpProjectId, setGcpProjectId] = useState('');
+  const [translationEngine, setTranslationEngine] = useState('llm_pymupdf');
 
   useEffect(() => {
     const fetchModels = async () => {
@@ -516,7 +539,11 @@ function NewJobModal({ token, onClose, fetchJobs, showError, showSuccess }) {
     formData.append('source_lang', sourceLang);
     formData.append('target_lang', targetLang);
     formData.append('verbose', verbose);
-    
+    formData.append('translation_engine', translationEngine);
+    if (translationEngine === 'translation_api') {
+      formData.append('translation_tier', 'basic');
+    }
+
     if (file) {
       formData.append('file', file);
     } else {
@@ -591,14 +618,51 @@ function NewJobModal({ token, onClose, fetchJobs, showError, showSuccess }) {
           </div>
 
           <div className="form-group">
-            <label>Model Override (Optional)</label>
-            <select value={modelOverride} onChange={(e) => setModelOverride(e.target.value)}>
-              <option value="">Use Default Configured Model</option>
-              {availableModels.map((m) => (
-                <option key={m} value={m}>{m}</option>
-              ))}
-            </select>
+            <label>Translation Engine</label>
+            <div style={{ display: 'flex', gap: '12px', marginTop: '6px', marginBottom: '8px' }}>
+              <label className="radio-label" style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '10px', borderRadius: '8px', border: translationEngine === 'llm_pymupdf' ? '2px solid var(--primary)' : '1px solid var(--panel-border)', background: translationEngine === 'llm_pymupdf' ? 'rgba(59, 130, 246, 0.1)' : 'transparent', cursor: 'pointer', transition: 'all 0.2s' }}>
+                <input 
+                  type="radio" 
+                  name="translationEngine" 
+                  value="llm_pymupdf" 
+                  checked={translationEngine === 'llm_pymupdf'} 
+                  onChange={() => setTranslationEngine('llm_pymupdf')}
+                  style={{ display: 'none' }}
+                />
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px', textAlign: 'center' }}>
+                  <span style={{ fontWeight: '600', fontSize: '14px', color: 'var(--text-primary)' }}>LLM + PyMuPDF</span>
+                  <span style={{ fontSize: '11px', color: '#9ca3af' }}>Layout-preserving Gemini translation</span>
+                </div>
+              </label>
+
+              <label className="radio-label" style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '10px', borderRadius: '8px', border: translationEngine === 'translation_api' ? '2px solid var(--primary)' : '1px solid var(--panel-border)', background: translationEngine === 'translation_api' ? 'rgba(59, 130, 246, 0.1)' : 'transparent', cursor: 'pointer', transition: 'all 0.2s' }}>
+                <input 
+                  type="radio" 
+                  name="translationEngine" 
+                  value="translation_api" 
+                  checked={translationEngine === 'translation_api'} 
+                  onChange={() => setTranslationEngine('translation_api')}
+                  style={{ display: 'none' }}
+                />
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px', textAlign: 'center' }}>
+                  <span style={{ fontWeight: '600', fontSize: '14px', color: 'var(--text-primary)' }}>Cloud Translation API</span>
+                  <span style={{ fontSize: '11px', color: '#9ca3af' }}>Google Cloud Translation service</span>
+                </div>
+              </label>
+            </div>
           </div>
+
+          {translationEngine === 'llm_pymupdf' && (
+            <div className="form-group">
+              <label>Model Override (Optional)</label>
+              <select value={modelOverride} onChange={(e) => setModelOverride(e.target.value)}>
+                <option value="">Use Default Configured Model</option>
+                {availableModels.map((m) => (
+                  <option key={m} value={m}>{m}</option>
+                ))}
+              </select>
+            </div>
+          )}
 
           <div style={{ border: '1px dashed var(--panel-border)', padding: '16px', borderRadius: '8px', marginBottom: '20px' }}>
             <div className="form-group">
@@ -677,7 +741,7 @@ function NewJobModal({ token, onClose, fetchJobs, showError, showSuccess }) {
 /* ==========================================
    ADMIN CONTROL PANEL
    ========================================== */
-function AdminDashboard({ token, showError, showSuccess }) {
+function AdminDashboard({ token, onLogout, showError, showSuccess }) {
   const [activeTab, setActiveTab] = useState('metrics'); // 'metrics', 'users', 'logs', 'config'
 
   return (
@@ -697,10 +761,10 @@ function AdminDashboard({ token, showError, showSuccess }) {
         </div>
       </div>
 
-      {activeTab === 'metrics' && <MetricsPanel token={token} showError={showError} />}
-      {activeTab === 'users' && <UsersPanel token={token} showError={showError} showSuccess={showSuccess} />}
-      {activeTab === 'logs' && <LogsPanel token={token} showError={showError} />}
-      {activeTab === 'config' && <ConfigPanel token={token} showError={showError} showSuccess={showSuccess} />}
+      {activeTab === 'metrics' && <MetricsPanel token={token} onLogout={onLogout} showError={showError} />}
+      {activeTab === 'users' && <UsersPanel token={token} onLogout={onLogout} showError={showError} showSuccess={showSuccess} />}
+      {activeTab === 'logs' && <LogsPanel token={token} onLogout={onLogout} showError={showError} />}
+      {activeTab === 'config' && <ConfigPanel token={token} onLogout={onLogout} showError={showError} showSuccess={showSuccess} />}
     </div>
   );
 }
@@ -847,7 +911,7 @@ function Chart({ data, valueKey, fillGradient }) {
 }
 
 /* --- Admin - Usage Metrics Tab --- */
-function MetricsPanel({ token, showError }) {
+function MetricsPanel({ token, onLogout, showError }) {
   const [axis, setAxis] = useState('days'); // 'days', 'weeks', 'months'
   const [stats, setStats] = useState({ translations: [], tokens: [] });
   const [loading, setLoading] = useState(true);
@@ -857,6 +921,10 @@ function MetricsPanel({ token, showError }) {
       const res = await fetch(`/api/admin/usage-stats?axis=${axis}`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
+      if (res.status === 401 || res.status === 403) {
+        onLogout();
+        return;
+      }
       if (!res.ok) throw new Error('Failed to fetch statistics');
       const data = await res.json();
       setStats(data);
@@ -913,7 +981,7 @@ function MetricsPanel({ token, showError }) {
 }
 
 /* --- Admin - User Management Tab --- */
-function UsersPanel({ token, showError, showSuccess }) {
+function UsersPanel({ token, onLogout, showError, showSuccess }) {
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -922,6 +990,10 @@ function UsersPanel({ token, showError, showSuccess }) {
       const res = await fetch('/api/admin/users', {
         headers: { 'Authorization': `Bearer ${token}` }
       });
+      if (res.status === 401 || res.status === 403) {
+        onLogout();
+        return;
+      }
       if (!res.ok) throw new Error('Failed to fetch users');
       const data = await res.json();
       setUsers(data);
@@ -946,6 +1018,10 @@ function UsersPanel({ token, showError, showSuccess }) {
         },
         body: JSON.stringify({ username, role: selectedRole })
       });
+      if (res.status === 401 || res.status === 403) {
+        onLogout();
+        return;
+      }
       if (!res.ok) throw new Error('Failed to update role');
       
       showSuccess(`Role for ${username} successfully updated to ${selectedRole}`);
@@ -1002,7 +1078,7 @@ function UsersPanel({ token, showError, showSuccess }) {
 }
 
 /* --- Admin - System Logs Tab --- */
-function LogsPanel({ token, showError }) {
+function LogsPanel({ token, onLogout, showError }) {
   const [logs, setLogs] = useState([]);
   const [severity, setSeverity] = useState('ALL');
   const [timeframe, setTimeframe] = useState('1d');
@@ -1014,6 +1090,10 @@ function LogsPanel({ token, showError }) {
       const res = await fetch(`/api/admin/logs?severity=${severity}&timeframe=${timeframe}`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
+      if (res.status === 401 || res.status === 403) {
+        onLogout();
+        return;
+      }
       if (!res.ok) throw new Error('Failed to fetch system logs');
       const data = await res.json();
       setLogs(data);
@@ -1093,7 +1173,7 @@ function LogsPanel({ token, showError }) {
 }
 
 /* --- Admin - Translation Config Tab --- */
-function ConfigPanel({ token, showError, showSuccess }) {
+function ConfigPanel({ token, onLogout, showError, showSuccess }) {
   const [configContent, setConfigContent] = useState('');
   const [promptContent, setPromptContent] = useState('');
   const [loading, setLoading] = useState(true);
@@ -1106,6 +1186,10 @@ function ConfigPanel({ token, showError, showSuccess }) {
       const resConfig = await fetch('/api/admin/config', {
         headers: { 'Authorization': `Bearer ${token}` }
       });
+      if (resConfig.status === 401 || resConfig.status === 403) {
+        onLogout();
+        return;
+      }
       const dataConfig = await resConfig.json();
       setConfigContent(dataConfig.content || '');
 
@@ -1113,6 +1197,10 @@ function ConfigPanel({ token, showError, showSuccess }) {
       const resPrompt = await fetch('/api/admin/prompt', {
         headers: { 'Authorization': `Bearer ${token}` }
       });
+      if (resPrompt.status === 401 || resPrompt.status === 403) {
+        onLogout();
+        return;
+      }
       const dataPrompt = await resPrompt.json();
       setPromptContent(dataPrompt.content || '');
     } catch (err) {
@@ -1137,6 +1225,10 @@ function ConfigPanel({ token, showError, showSuccess }) {
         },
         body: JSON.stringify({ content: configContent })
       });
+      if (res.status === 401 || res.status === 403) {
+        onLogout();
+        return;
+      }
       if (!res.ok) throw new Error('Save configuration failed');
       showSuccess('General translation configuration updated (previous file backed up).');
     } catch (err) {
@@ -1157,6 +1249,10 @@ function ConfigPanel({ token, showError, showSuccess }) {
         },
         body: JSON.stringify({ content: promptContent })
       });
+      if (res.status === 401 || res.status === 403) {
+        onLogout();
+        return;
+      }
       if (!res.ok) throw new Error('Save prompt failed');
       showSuccess('Instructional translation prompt template updated (previous file backed up).');
     } catch (err) {

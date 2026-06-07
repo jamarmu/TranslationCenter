@@ -1,10 +1,10 @@
 # Translation Center - Enterprise Document Translator
 
-Translation Center is a microservices-based translation management system. It enables teams to upload documents (PDFs and Google Docs) from local machines or import them directly via Google Drive links. The system translates the document content using the **Gemini model API** while leveraging a translation knowledge base corpus and do-not-translate rules. It preserves document layouts, formatting, and embedded images. 
+Translation Center is a microservices-based translation management system. It enables teams to upload documents (PDFs and Google Docs) from local machines or import them directly via Google Drive links. The system translates the document content using either the **Gemini model API** + PDF manipulation, or the **Cloud Translation API** service. 
 
 After translation, the document goes through an approval workflow where reviewers can approve or reject the candidates.
 
-Created with Antigravity and Gemini 3.5 Flash 
+Created with Antigravity and Gemini 3.5 Flash.
 Use at you own risk.
 
 ## System Architecture
@@ -24,6 +24,7 @@ Clone this repo to your machine our cloud shell and use terraform to deploy to G
 Enable the following APIs for the project:
   - Cloud Resource Manager API 
   - Identity and Access Management (IAM) API
+  - Cloud Translation API (if you want to use this option)
 
 ```bash
 cd terraform

@@ -27,7 +27,8 @@ resource "google_project_service" "apis" {
     "drive.googleapis.com",
     "docs.googleapis.com",
     "artifactregistry.googleapis.com",
-    "cloudbuild.googleapis.com"
+    "cloudbuild.googleapis.com",
+    "translate.googleapis.com"
   ])
   service            = each.key
   disable_on_destroy = false
@@ -53,7 +54,7 @@ resource "null_resource" "build_backend" {
   }
 
   provisioner "local-exec" {
-    command = "sleep 30 && gcloud builds submit --tag ${var.region}-docker.pkg.dev/${var.project_id}/${google_artifact_registry_repository.translation_repo.repository_id}/translation-backend:latest ${path.module}/../backend --project ${var.project_id}"
+    command = "sleep 60 && gcloud builds submit --tag ${var.region}-docker.pkg.dev/${var.project_id}/${google_artifact_registry_repository.translation_repo.repository_id}/translation-backend:latest ${path.module}/../backend --project ${var.project_id}"
   }
 
   depends_on = [
@@ -81,7 +82,7 @@ resource "null_resource" "build_frontend" {
   }
 
   provisioner "local-exec" {
-    command = "sleep 30 && gcloud builds submit --tag ${var.region}-docker.pkg.dev/${var.project_id}/${google_artifact_registry_repository.translation_repo.repository_id}/translation-frontend:latest ${path.module}/../frontend --project ${var.project_id}"
+    command = "sleep 60 && gcloud builds submit --tag ${var.region}-docker.pkg.dev/${var.project_id}/${google_artifact_registry_repository.translation_repo.repository_id}/translation-frontend:latest ${path.module}/../frontend --project ${var.project_id}"
   }
 
   depends_on = [
@@ -210,6 +211,13 @@ resource "google_project_iam_member" "sql_client" {
 resource "google_project_iam_member" "vertex_ai_user" {
   project = var.project_id
   role    = "roles/aiplatform.user"
+  member  = "serviceAccount:${google_service_account.run_sa.email}"
+}
+
+# Cloud Translation API User role for SA to call Cloud Translation API
+resource "google_project_iam_member" "cloud_translate_user" {
+  project = var.project_id
+  role    = "roles/cloudtranslate.user"
   member  = "serviceAccount:${google_service_account.run_sa.email}"
 }
 

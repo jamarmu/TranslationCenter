@@ -12,6 +12,203 @@ from google.cloud import storage
 from googleapiclient.discovery import build
 from google.oauth2 import service_account
 from db import log_event, log_tokens, update_job_status, get_job
+from google.cloud import translate_v3 as translate
+import zipfile
+import xml.etree.ElementTree as ET
+
+LANG_NAME_TO_CODE = {
+    "spanish": "es",
+    "english": "en",
+    "french": "fr",
+    "portuguese": "pt",
+    "german": "de",
+    "italian": "it",
+}
+
+def get_pdf_page_count(pdf_path):
+    try:
+        doc = fitz.open(pdf_path)
+        pages = len(doc)
+        doc.close()
+        return pages
+    except Exception as e:
+        log_event("WARNING", f"Failed to get PDF page count: {e}")
+        return 1
+
+def get_docx_page_count(docx_path):
+    try:
+        with zipfile.ZipFile(docx_path) as z:
+            if 'docProps/app.xml' in z.namelist():
+                xml_content = z.read('docProps/app.xml')
+                root = ET.fromstring(xml_content)
+                for elem in root.iter():
+                    if elem.tag.endswith('Pages') and elem.text:
+                        return int(elem.text)
+        # Fallback based on text extraction
+        char_count = 0
+        with zipfile.ZipFile(docx_path) as z:
+            if 'word/document.xml' in z.namelist():
+                xml_content = z.read('word/document.xml')
+                root = ET.fromstring(xml_content)
+                for elem in root.iter():
+                    if elem.tag.endswith('t') and elem.text:
+                        char_count += len(elem.text)
+        return max(1, char_count // 1500)
+    except Exception as e:
+        log_event("WARNING", f"Failed to get DOCX page count: {e}")
+        return 1
+
+def translate_document_with_translation_api(input_path, output_path, job):
+    try:
+        creds_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+        if creds_path and os.path.exists(creds_path):
+            creds = service_account.Credentials.from_service_account_file(creds_path)
+            client = translate.TranslationServiceClient(credentials=creds)
+        else:
+            client = translate.TranslationServiceClient()
+    except Exception as e:
+        log_event("ERROR", f"Failed to initialize TranslationServiceClient: {e}")
+        raise e
+
+    location = GCP_REGION if GCP_REGION != "global" else "us-central1"
+    parent = f"projects/{GCP_PROJECT}/locations/{location}"
+
+    with open(input_path, "rb") as document:
+        document_content = document.read()
+
+    mime_type = "application/pdf"
+    if job.get("file_type") == "gdoc" or input_path.lower().endswith(".docx"):
+        mime_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+    document_input_config = {
+        "content": document_content,
+        "mime_type": mime_type
+    }
+
+    source_lang_name = job.get("source_lang", "Spanish").lower()
+    target_lang_name = job.get("target_lang", "English").lower()
+    source_lang_code = LANG_NAME_TO_CODE.get(source_lang_name, "es")
+    target_lang_code = LANG_NAME_TO_CODE.get(target_lang_name, "en")
+
+    tier = job.get("translation_tier", "basic")
+    # The Cloud Translation API does not support the LLM model (general/translation-llm)
+    # for document translations (translate_document method).
+    # It throws "400 LLM models is not enabled for document translation."
+    # Therefore, we always fall back to the standard Neural Machine Translation model (general/nmt).
+    if tier == "advanced":
+        log_event("WARNING", "Cloud Translation API does not support LLM models (general/translation-llm) for document translation. Falling back to the standard Neural Machine Translation model (general/nmt) to translate the document.")
+    model_id = "general/nmt"
+    model_path = f"{parent}/models/{model_id}"
+
+    log_event("INFO", f"Calling Cloud Translation API ({tier}) using model {model_id} for {mime_type} from {source_lang_code} to {target_lang_code}")
+
+    request = translate.TranslateDocumentRequest(
+        parent=parent,
+        target_language_code=target_lang_code,
+        source_language_code=source_lang_code,
+        document_input_config=document_input_config,
+        model=model_path
+    )
+
+    response = client.translate_document(request=request)
+    translated_bytes = response.document_translation.byte_stream_outputs[0]
+
+    with open(output_path, "wb") as f:
+        f.write(translated_bytes)
+
+    log_event("INFO", f"Document translation completed successfully. Output written to {output_path}")
+
+def translate_google_doc_with_translation_api(drive_url, job, destination_url=None):
+    drive_service, docs_service = get_google_services()
+    if not drive_service or not docs_service:
+        raise Exception("Google APIs not authenticated or unavailable")
+        
+    cleanup_old_drive_files(drive_service)
+    
+    match = re.search(r"/document/d/([a-zA-Z0-9-_]+)", drive_url)
+    if not match:
+        raise Exception("Invalid Google Drive Document URL")
+    doc_id = match.group(1)
+    
+    doc = docs_service.documents().get(documentId=doc_id).execute()
+    doc_title = doc.get("title", "Untitled Document")
+    
+    log_event("INFO", f"Exporting source document {doc_id} to DOCX for Cloud Translation API...")
+    export_req = drive_service.files().export_media(
+        fileId=doc_id,
+        mimeType='application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    )
+    docx_bytes = export_req.execute()
+    
+    temp_docx = tempfile.NamedTemporaryFile(suffix=".docx", delete=False)
+    temp_docx.write(docx_bytes)
+    temp_docx_path = temp_docx.name
+    temp_docx.close()
+    
+    try:
+        pages_count = get_docx_page_count(temp_docx_path)
+        
+        temp_out = temp_docx_path + "_out.docx"
+        translate_document_with_translation_api(temp_docx_path, temp_out, job)
+        
+        with open(temp_out, "rb") as f:
+            translated_docx_bytes = f.read()
+            
+        if os.path.exists(temp_out):
+            os.remove(temp_out)
+    finally:
+        if os.path.exists(temp_docx_path):
+            os.remove(temp_docx_path)
+            
+    if destination_url:
+        dest_match = re.search(r"/document/d/([a-zA-Z0-9-_]+)", destination_url)
+        if not dest_match:
+            dest_doc_id = destination_url
+        else:
+            dest_doc_id = dest_match.group(1)
+            
+        log_event("INFO", f"Overwriting destination Google Doc {dest_doc_id} with translated DOCX bytes...")
+        from googleapiclient.http import MediaIoBaseUpload
+        import io
+        
+        media = MediaIoBaseUpload(
+            io.BytesIO(translated_docx_bytes),
+            mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            resumable=True
+        )
+        
+        drive_service.files().update(
+            fileId=dest_doc_id,
+            media_body=media
+        ).execute()
+        
+        return destination_url, pages_count
+    else:
+        log_event("INFO", f"Copying source document {doc_id} structure to candidate file...")
+        cand_title = f"{doc_title}_translation_candidate_{job['target_lang']}"
+        
+        copied_file = drive_service.files().copy(
+            fileId=doc_id, 
+            body={"name": cand_title}
+        ).execute()
+        target_doc_id = copied_file.get("id")
+        
+        log_event("INFO", f"Overwriting candidate Google Doc {target_doc_id} with translated DOCX bytes...")
+        from googleapiclient.http import MediaIoBaseUpload
+        import io
+        
+        media = MediaIoBaseUpload(
+            io.BytesIO(translated_docx_bytes),
+            mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            resumable=True
+        )
+        
+        drive_service.files().update(
+            fileId=target_doc_id,
+            media_body=media
+        ).execute()
+        
+        return f"https://docs.google.com/document/d/{target_doc_id}/edit", pages_count
 
 # Load environment variables
 GCP_PROJECT = os.getenv("GCP_PROJECT")
@@ -141,34 +338,14 @@ def run_gemini_translation(prompt_text, model_name="gemini-3.5-flash", verbose=F
         raise e
 
 # Core PDF Text Extraction & Redaction Translation Overlay
-def translate_pdf_file(input_path, output_path, job, config_settings, prompt_template):
+
+def extract_pdf_to_temps(input_path):
     doc = fitz.open(input_path)
-    
-    def find_fitting_fontsize(rect, text, start_fontsize, fontname):
-        temp_doc = fitz.open()
-        temp_page = temp_doc.new_page(width=max(rect.x1 + 100, 100), height=max(rect.y1 + 100, 100))
-        fontsize = start_fontsize
-        while fontsize >= 2.0:
-            ret = temp_page.insert_textbox(
-                rect,
-                text,
-                fontsize=fontsize,
-                fontname=fontname
-            )
-            if ret >= 0:
-                temp_doc.close()
-                return fontsize
-            fontsize -= 0.5
-        temp_doc.close()
-        return 2.0
-    
-    # Extract blocks with coordinates
     xml_blocks = []
     block_map = {}
     
     for page_num in range(len(doc)):
         page = doc[page_num]
-        # Dict representation returns detail layouts
         page_dict = page.get_text("dict")
         for b_idx, block in enumerate(page_dict.get("blocks", [])):
             if "lines" not in block:
@@ -186,7 +363,6 @@ def translate_pdf_file(input_path, output_path, job, config_settings, prompt_tem
             block_id = f"p{page_num}_b{b_idx}"
             xml_blocks.append(f'<block id="{block_id}">{block_text}</block>')
             
-            # Save original position, size, and style for rebuilding
             block_map[block_id] = {
                 "page": page_num,
                 "bbox": block["bbox"],
@@ -195,11 +371,34 @@ def translate_pdf_file(input_path, output_path, job, config_settings, prompt_tem
                 "font": block["lines"][0]["spans"][0]["font"],
             }
             
+    doc.close()
+    
     if not xml_blocks:
-        # Empty doc
-        log_event("ERROR", f"No text found in PDF file {input_path}")
         raise Exception("Input PDF is empty or non-parseable")
+        
+    # Create Phase 1 temp files
+    # 1. Template layout metadata file
+    temp_template = tempfile.NamedTemporaryFile(mode='w', suffix='_layout.json', delete=False)
+    template_data = {
+        "input_path": input_path,
+        "block_map": block_map
+    }
+    json.dump(template_data, temp_template)
+    temp_template.close()
+    
+    # 2. Source text file for translation
+    temp_source = tempfile.NamedTemporaryFile(mode='w', suffix='_source.md', delete=False)
+    temp_source.write("\n".join(xml_blocks))
+    temp_source.close()
+    
+    log_event("INFO", f"Phase 1 PDF Extraction complete. Template layout temp: {temp_template.name}, Source XML temp: {temp_source.name}")
+    return temp_template.name, temp_source.name
 
+
+def translate_source_temp(source_temp_path, job, config_settings, prompt_template):
+    with open(source_temp_path, 'r', encoding='utf-8') as f:
+        source_doc_xml = f.read()
+        
     # Fetch reference materials
     corpus_csv = get_gcs_file_text(config_settings["corpus_file"])
     dnt_csv = get_gcs_file_text(config_settings["dnt_file"])
@@ -210,8 +409,6 @@ def translate_pdf_file(input_path, output_path, job, config_settings, prompt_tem
     prompt = prompt.replace("[Target Language]", job["target_lang"])
     prompt = prompt.replace("[Paste your CSV text of known translations here. Format: Source Text, Target Translation]", corpus_csv)
     prompt = prompt.replace("[Paste your list of names, brands, and product titles here, one per line or comma-separated]", dnt_csv)
-    
-    source_doc_xml = "\n".join(xml_blocks)
     prompt = prompt.replace("[Paste the document text you want translated here]", source_doc_xml)
     
     # Run translation
@@ -219,16 +416,48 @@ def translate_pdf_file(input_path, output_path, job, config_settings, prompt_tem
     verbose = bool(job.get("verbose", False))
     translated_xml, tokens_used = run_gemini_translation(prompt, model_to_use, verbose=verbose)
     
-    # Parse translated XML blocks
+    # Overwrite source temp file with translated XML blocks
+    with open(source_temp_path, 'w', encoding='utf-8') as f:
+        f.write(translated_xml)
+        
+    log_event("INFO", f"Phase 2 Translation complete. Overwrote source XML temp: {source_temp_path}")
+    return tokens_used
+
+
+def merge_pdf_from_temps(layout_json_path, translated_xml_path, output_path):
+    with open(layout_json_path, 'r', encoding='utf-8') as f:
+        layout_data = json.load(f)
+        
+    input_path = layout_data["input_path"]
+    block_map = layout_data["block_map"]
+    
+    with open(translated_xml_path, 'r', encoding='utf-8') as f:
+        translated_xml = f.read()
+        
     translated_map = {}
     matches = re.findall(r'<block id="([^"]+)">([\s\S]*?)</block>', translated_xml)
     for block_id, text in matches:
         translated_map[block_id] = text.strip()
         
-    # Rebuild PDF Overlay page-by-page for cleaner/faster layout edits
+    def find_fitting_fontsize(rect, text, start_fontsize, fontname):
+        temp_doc = fitz.open()
+        temp_page = temp_doc.new_page(width=max(rect.x1 + 100, 100), height=max(rect.y1 + 100, 100))
+        fontsize = start_fontsize
+        while fontsize >= 2.0:
+            ret = temp_page.insert_textbox(
+                rect,
+                text,
+                fontsize=fontsize,
+                fontname=fontname
+            )
+            if ret >= 0:
+                temp_doc.close()
+                return fontsize
+            fontsize -= 0.5
+        temp_doc.close()
+        return 2.0
+
     out_doc = fitz.open(input_path)
-    
-    # Group translated blocks by their page number
     page_blocks = {}
     for block_id, orig_meta in block_map.items():
         translated_text = translated_map.get(block_id)
@@ -242,25 +471,22 @@ def translate_pdf_file(input_path, output_path, job, config_settings, prompt_tem
     for page_num, blocks in page_blocks.items():
         page = out_doc[page_num]
         
-        # 1. Add all redactions for this page
+        # 1. Add redactions for page
         for block_id, orig_meta, translated_text in blocks:
             rect = fitz.Rect(orig_meta["bbox"])
-            page.add_redact_annot(rect, fill=(1, 1, 1)) # White block overlay
+            page.add_redact_annot(rect, fill=(1, 1, 1))
             
-        # 2. Apply all redactions for this page once (clears original text)
+        # 2. Apply redactions
         page.apply_redactions()
         
-        # 3. Draw translated text inside exact same block boxes
+        # 3. Draw text
         for block_id, orig_meta, translated_text in blocks:
             rect = fitz.Rect(orig_meta["bbox"])
-            
-            # Convert span integer color (0xRRGGBB) to RGB float tuple
             color_int = orig_meta["color"]
             r = ((color_int >> 16) & 0xFF) / 255.0
             g = ((color_int >> 8) & 0xFF) / 255.0
             b = (color_int & 0xFF) / 255.0
             
-            # Ensure readability: if text color is too light, default to black on the white overlay
             if r > 0.8 and g > 0.8 and b > 0.8:
                 color_rgb = (0, 0, 0)
             else:
@@ -277,12 +503,22 @@ def translate_pdf_file(input_path, output_path, job, config_settings, prompt_tem
                 )
             except Exception as draw_err:
                 log_event("ERROR", f"Error rendering text on PDF block {block_id}: {draw_err}")
-            
+                
     out_doc.save(output_path)
     out_doc.close()
-    doc.close()
-    
-    return tokens_used
+    log_event("INFO", f"Phase 3 PDF Merge complete. Candidate PDF saved: {output_path}")
+
+
+def translate_pdf_file(input_path, output_path, job, config_settings, prompt_template):
+    layout_temp, source_temp = extract_pdf_to_temps(input_path)
+    try:
+        tokens_used = translate_source_temp(source_temp, job, config_settings, prompt_template)
+        merge_pdf_from_temps(layout_temp, source_temp, output_path)
+        return tokens_used
+    finally:
+        if os.path.exists(layout_temp): os.remove(layout_temp)
+        if os.path.exists(source_temp): os.remove(source_temp)
+
 
 # Helper to clean up old files owned by the service account to free up storage quota
 def cleanup_old_drive_files(drive_service):
@@ -323,6 +559,7 @@ def cleanup_old_drive_files(drive_service):
     except Exception as e:
         log_event("WARNING", f"Google Drive cleanup failed: {e}")
 
+
 # Helper to recursively extract paragraphs from structural elements
 def extract_paragraphs_from_elements(elements):
     paras = []
@@ -337,34 +574,25 @@ def extract_paragraphs_from_elements(elements):
             paras.extend(extract_paragraphs_from_elements(el["tableOfContents"].get("content", [])))
     return paras
 
-# Core Google Docs Translation (Drive API copy and replacements or direct write)
-def translate_google_doc(drive_url, job, config_settings, prompt_template, destination_url=None):
-    drive_service, docs_service = get_google_services()
-    if not drive_service or not docs_service:
-        raise Exception("Google APIs not authenticated or unavailable")
-        
-    # Clean up old drive files to free up quota before copying
-    cleanup_old_drive_files(drive_service)
-        
-    # Extract file ID from URL
+
+# Core Google Docs Translation
+
+def extract_gdoc_to_temps(drive_url, job, docs_service, drive_service, destination_url=None):
     match = re.search(r"/document/d/([a-zA-Z0-9-_]+)", drive_url)
     if not match:
         raise Exception("Invalid Google Drive Document URL")
     doc_id = match.group(1)
     
-    # Fetch Doc Content to get original title
     doc = docs_service.documents().get(documentId=doc_id).execute()
     doc_title = doc.get("title", "Untitled Document")
     
     if destination_url:
-        # Extract destination file ID
         dest_match = re.search(r"/document/d/([a-zA-Z0-9-_]+)", destination_url)
         if not dest_match:
             dest_doc_id = destination_url
         else:
             dest_doc_id = dest_match.group(1)
 
-        # 1. Export the source document as DOCX bytes
         log_event("INFO", f"Exporting source document {doc_id} to DOCX...")
         export_req = drive_service.files().export_media(
             fileId=doc_id,
@@ -372,8 +600,7 @@ def translate_google_doc(drive_url, job, config_settings, prompt_template, desti
         )
         docx_bytes = export_req.execute()
 
-        # 2. Overwrite the destination document with the source DOCX bytes
-        log_event("INFO", f"Overwriting destination Google Doc {dest_doc_id} with source DOCX bytes to copy formatting, tables, and images...")
+        log_event("INFO", f"Overwriting destination Google Doc {dest_doc_id} with source DOCX bytes...")
         from googleapiclient.http import MediaIoBaseUpload
         import io
 
@@ -388,12 +615,8 @@ def translate_google_doc(drive_url, job, config_settings, prompt_template, desti
             media_body=media
         ).execute()
 
-        # 3. Now the destination document is an exact copy of the source document, owned by the user.
-        # We fetch its structure to translate in-place.
-        log_event("INFO", f"Fetching overwritten destination Google Doc {dest_doc_id} to translate in-place...")
         target_doc_id = dest_doc_id
     else:
-        # Fall back to default copy-and-translate candidate flow
         log_event("INFO", f"Copying source document {doc_id} to candidate file...")
         cand_title = f"{doc_title}_translation_candidate_{job['target_lang']}"
         copied_file = drive_service.files().copy(
@@ -402,72 +625,74 @@ def translate_google_doc(drive_url, job, config_settings, prompt_template, desti
         ).execute()
         target_doc_id = copied_file.get("id")
 
-    # Fetch target document (either destination doc or copied candidate doc)
     target_doc = docs_service.documents().get(documentId=target_doc_id).execute()
     target_body = target_doc.get("body", {}).get("content", [])
     
-    # Extract all paragraph elements recursively
     all_paras = extract_paragraphs_from_elements(target_body)
-    
-    # Extract text runs and build translation block list
     paragraphs_to_translate = []
-    para_mapping = {}
+    para_runs = {}
     
     for idx, para in enumerate(all_paras):
         para_text = ""
-        for el in para.get("elements", []):
+        elements = para.get("elements", [])
+        text_runs = []
+        for el in elements:
             if "textRun" in el:
                 para_text += el["textRun"].get("content", "")
+                text_runs.append({
+                    "startIndex": el.get("startIndex"),
+                    "endIndex": el.get("endIndex"),
+                    "content": el["textRun"].get("content", "")
+                })
         clean_text = para_text.strip()
         if clean_text:
             para_id = f"para_{idx}"
             paragraphs_to_translate.append(f'<block id="{para_id}">{clean_text}</block>')
-            para_mapping[para_id] = para
+            para_runs[para_id] = text_runs
             
-    if not paragraphs_to_translate:
-        if destination_url:
-            return destination_url, 0
-        else:
-            cand_url = f"https://docs.google.com/document/d/{target_doc_id}/edit"
-            return cand_url, 0
-            
-    # Translate
-    corpus_csv = get_gcs_file_text(config_settings["corpus_file"])
-    dnt_csv = get_gcs_file_text(config_settings["dnt_file"])
+    temp_template = tempfile.NamedTemporaryFile(mode='w', suffix='_gdoc_layout.json', delete=False)
+    template_data = {
+        "target_doc_id": target_doc_id,
+        "para_runs": para_runs,
+        "destination_url": destination_url
+    }
+    json.dump(template_data, temp_template)
+    temp_template.close()
     
-    prompt = prompt_template
-    prompt = prompt.replace("[Source Language]", job["source_lang"])
-    prompt = prompt.replace("[Target Language]", job["target_lang"])
-    prompt = prompt.replace("[Paste your CSV text of known translations here. Format: Source Text, Target Translation]", corpus_csv)
-    prompt = prompt.replace("[Paste your list of names, brands, and product titles here, one per line or comma-separated]", dnt_csv)
-    prompt = prompt.replace("[Paste the document text you want translated here]", "\n".join(paragraphs_to_translate))
+    temp_source = tempfile.NamedTemporaryFile(mode='w', suffix='_gdoc_source.md', delete=False)
+    temp_source.write("\n".join(paragraphs_to_translate))
+    temp_source.close()
     
-    model_to_use = job["model_override"] if job["model_override"] else config_settings["model"]
-    verbose = bool(job.get("verbose", False))
-    translated_xml, tokens_used = run_gemini_translation(prompt, model_to_use, verbose=verbose)
+    log_event("INFO", f"Phase 1 GDoc Extraction complete. Template layout temp: {temp_template.name}, Source XML temp: {temp_source.name}")
+    return temp_template.name, temp_source.name
+
+
+def merge_gdoc_from_temps(layout_json_path, translated_xml_path, docs_service, job):
+    with open(layout_json_path, 'r', encoding='utf-8') as f:
+        layout_data = json.load(f)
+        
+    target_doc_id = layout_data["target_doc_id"]
+    para_runs = layout_data["para_runs"]
+    destination_url = layout_data["destination_url"]
     
+    with open(translated_xml_path, 'r', encoding='utf-8') as f:
+        translated_xml = f.read()
+        
     translated_map = {}
     matches = re.findall(r'<block id="([^"]+)">([\s\S]*?)</block>', translated_xml)
     for block_id, text in matches:
         translated_map[block_id] = text.strip()
         
-    # Build update operations
     update_ops = []
     for block_id, translated_text in translated_map.items():
-        para = para_mapping.get(block_id)
-        if not para:
-            continue
-            
-        elements = para.get("elements", [])
-        text_runs = [el for el in elements if "textRun" in el]
+        text_runs = para_runs.get(block_id)
         if not text_runs:
             continue
             
-        # Add delete operations for all text runs in this paragraph
         for run in text_runs:
             start = run.get("startIndex")
             end = run.get("endIndex")
-            run_text = run["textRun"].get("content", "")
+            run_text = run.get("content", "")
             
             if run_text.endswith("\n"):
                 target_end = end - 1
@@ -484,7 +709,6 @@ def translate_google_doc(drive_url, job, config_settings, prompt_template, desti
                     }
                 }))
                 
-        # Insert the translated text at the startIndex of the first text run
         first_run_start = text_runs[0].get("startIndex")
         update_ops.append((first_run_start, 1, {
             "insertText": {
@@ -495,7 +719,18 @@ def translate_google_doc(drive_url, job, config_settings, prompt_template, desti
             }
         }))
         
-    # Sort operations: descending by startIndex, and delete (0) before insert (1)
+    # Add translation header statement at index 1
+    timestamp_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    statement = f"Translated with Gemini by Translation Center from {job['source_lang']} to {job['target_lang']} on {timestamp_str}\n"
+    update_ops.append((1, 2, {
+        "insertText": {
+            "location": {
+                "index": 1
+            },
+            "text": statement
+        }
+    }))
+    
     update_ops.sort(key=lambda x: (-x[0], x[1]))
     requests = [op[2] for op in update_ops]
     
@@ -504,12 +739,39 @@ def translate_google_doc(drive_url, job, config_settings, prompt_template, desti
             documentId=target_doc_id,
             body={"requests": requests}
         ).execute()
-
+        
     if destination_url:
-        return destination_url, tokens_used
+        return destination_url
     else:
-        cand_url = f"https://docs.google.com/document/d/{target_doc_id}/edit"
+        return f"https://docs.google.com/document/d/{target_doc_id}/edit"
+
+
+def translate_google_doc(drive_url, job, config_settings, prompt_template, destination_url=None):
+    drive_service, docs_service = get_google_services()
+    if not drive_service or not docs_service:
+        raise Exception("Google APIs not authenticated or unavailable")
+        
+    cleanup_old_drive_files(drive_service)
+    
+    layout_temp, source_temp = extract_gdoc_to_temps(drive_url, job, docs_service, drive_service, destination_url)
+    try:
+        with open(source_temp, 'r', encoding='utf-8') as f:
+            source_content = f.read().strip()
+            
+        if not source_content:
+            if destination_url:
+                return destination_url, 0
+            else:
+                with open(layout_temp, 'r') as lf:
+                    layout_data = json.load(lf)
+                return f"https://docs.google.com/document/d/{layout_data['target_doc_id']}/edit", 0
+                
+        tokens_used = translate_source_temp(source_temp, job, config_settings, prompt_template)
+        cand_url = merge_gdoc_from_temps(layout_temp, source_temp, docs_service, job)
         return cand_url, tokens_used
+    finally:
+        if os.path.exists(layout_temp): os.remove(layout_temp)
+        if os.path.exists(source_temp): os.remove(source_temp)
 
 # Main Job Processing Runner
 def process_translation_job(job_id):
@@ -553,47 +815,81 @@ def process_translation_job(job_id):
             # Prepare Output file
             temp_out_path = temp_in_path + "_out.pdf"
             
-            # Run PDF Translation
-            tokens_used = translate_pdf_file(
-                temp_in_path, 
-                temp_out_path, 
-                job, 
-                config_settings, 
-                prompt_template
-            )
-            
-            # Upload Candidate to Output GCS bucket
-            cand_filename = f"{job_id}_translation_candidate_{job['target_lang']}.pdf"
-            cand_uri = f"gs://{OUTPUT_BUCKET}/{cand_filename}"
-            client.bucket(OUTPUT_BUCKET).blob(cand_filename).upload_from_filename(temp_out_path)
-            
-            # Cleanup local temp files
-            if os.path.exists(temp_in_path): os.remove(temp_in_path)
-            if os.path.exists(temp_out_path): os.remove(temp_out_path)
-            
-            # Log usage & update DB status
-            log_tokens(job_id, tokens_used)
-            model_to_use = job["model_override"] if job["model_override"] else config_settings["model"]
-            update_job_status(job_id, "PENDING_REVIEW", cand_uri, model_to_use)
+            if job.get("translation_engine") == "translation_api":
+                # Call Cloud Translation API
+                translate_document_with_translation_api(temp_in_path, temp_out_path, job)
+                pages_count = get_pdf_page_count(temp_in_path)
+                
+                # Upload Candidate to Output GCS bucket
+                dir_part, file_part = os.path.split(blob_name)
+                name_part, ext_part = os.path.splitext(file_part)
+                cand_filename = f"{name_part}_translation_candidate_{job['target_lang']}{ext_part}"
+                if dir_part:
+                    cand_filename = f"{dir_part}/{cand_filename}"
+                cand_uri = f"gs://{OUTPUT_BUCKET}/{cand_filename}"
+                client.bucket(OUTPUT_BUCKET).blob(cand_filename).upload_from_filename(temp_out_path)
+                
+                # Cleanup local temp files
+                if os.path.exists(temp_in_path): os.remove(temp_in_path)
+                if os.path.exists(temp_out_path): os.remove(temp_out_path)
+                
+                model_to_use = f"Cloud Translation - {job.get('translation_tier', 'basic').capitalize()}"
+                update_job_status(job_id, "PENDING_REVIEW", cand_uri, model_to_use, pages_translated=pages_count)
+            else:
+                # Run PDF Translation (LLM + PyMuPDF)
+                tokens_used = translate_pdf_file(
+                    temp_in_path, 
+                    temp_out_path, 
+                    job, 
+                    config_settings, 
+                    prompt_template
+                )
+                
+                # Upload Candidate to Output GCS bucket
+                dir_part, file_part = os.path.split(blob_name)
+                name_part, ext_part = os.path.splitext(file_part)
+                cand_filename = f"{name_part}_translation_candidate_{job['target_lang']}{ext_part}"
+                if dir_part:
+                    cand_filename = f"{dir_part}/{cand_filename}"
+                cand_uri = f"gs://{OUTPUT_BUCKET}/{cand_filename}"
+                client.bucket(OUTPUT_BUCKET).blob(cand_filename).upload_from_filename(temp_out_path)
+                
+                # Cleanup local temp files
+                if os.path.exists(temp_in_path): os.remove(temp_in_path)
+                if os.path.exists(temp_out_path): os.remove(temp_out_path)
+                
+                # Log usage & update DB status
+                log_tokens(job_id, tokens_used)
+                model_to_use = job["model_override"] if job["model_override"] else config_settings["model"]
+                update_job_status(job_id, "PENDING_REVIEW", cand_uri, model_to_use)
             
         else:
             # Google Drive URL
             drive_url = job["source_file_path"]
             if job["file_type"] == "gdoc":
                 destination_url = job.get("candidate_file_path")
-                cand_url, tokens_used = translate_google_doc(
-                    drive_url, 
-                    job, 
-                    config_settings, 
-                    prompt_template,
-                    destination_url=destination_url
-                )
-                log_tokens(job_id, tokens_used)
-                model_to_use = job["model_override"] if job["model_override"] else config_settings["model"]
-                update_job_status(job_id, "PENDING_REVIEW", cand_url, model_to_use)
+                
+                if job.get("translation_engine") == "translation_api":
+                    cand_url, pages_count = translate_google_doc_with_translation_api(
+                        drive_url, 
+                        job, 
+                        destination_url=destination_url
+                    )
+                    model_to_use = f"Cloud Translation - {job.get('translation_tier', 'basic').capitalize()}"
+                    update_job_status(job_id, "PENDING_REVIEW", cand_url, model_to_use, pages_translated=pages_count)
+                else:
+                    cand_url, tokens_used = translate_google_doc(
+                        drive_url, 
+                        job, 
+                        config_settings, 
+                        prompt_template,
+                        destination_url=destination_url
+                    )
+                    log_tokens(job_id, tokens_used)
+                    model_to_use = job["model_override"] if job["model_override"] else config_settings["model"]
+                    update_job_status(job_id, "PENDING_REVIEW", cand_url, model_to_use)
             else:
                 # PDF Google Drive download, translate local PDF, upload translated back to Drive
-                # For simplicity, download GDrive file bytes and overlay them
                 drive_service, docs_service = get_google_services()
                 if not drive_service:
                     raise Exception("Google API client credentials missing")
@@ -624,33 +920,55 @@ def process_translation_job(job_id):
                 while not done:
                     status, done = downloader.next_chunk()
                     
-                # Output filename & run translation overlay
+                # Output filename & run translation
                 temp_out_path = temp_in_path + "_out.pdf"
-                tokens_used = translate_pdf_file(
-                    temp_in_path, 
-                    temp_out_path, 
-                    job, 
-                    config_settings, 
-                    prompt_template
-                )
                 
-                # Upload candidate PDF copy back to Google Drive
-                from googleapiclient.http import MediaFileUpload
-                cand_title = f"{title.replace('.pdf', '')}_translation_candidate_{job['target_lang']}.pdf"
-                media = MediaFileUpload(temp_out_path, mimetype='application/pdf')
-                uploaded_file = drive_service.files().create(
-                    body={"name": cand_title, "mimeType": "application/pdf"},
-                    media_body=media
-                ).execute()
-                cand_url = f"https://drive.google.com/file/d/{uploaded_file.get('id')}/view"
-                
-                # Clean local temporary files
-                if os.path.exists(temp_in_path): os.remove(temp_in_path)
-                if os.path.exists(temp_out_path): os.remove(temp_out_path)
-                
-                log_tokens(job_id, tokens_used)
-                model_to_use = job["model_override"] if job["model_override"] else config_settings["model"]
-                update_job_status(job_id, "PENDING_REVIEW", cand_url, model_to_use)
+                if job.get("translation_engine") == "translation_api":
+                    translate_document_with_translation_api(temp_in_path, temp_out_path, job)
+                    pages_count = get_pdf_page_count(temp_in_path)
+                    
+                    # Upload candidate PDF copy back to Google Drive
+                    from googleapiclient.http import MediaFileUpload
+                    cand_title = f"{title.replace('.pdf', '')}_translation_candidate_{job['target_lang']}.pdf"
+                    media = MediaFileUpload(temp_out_path, mimetype='application/pdf')
+                    uploaded_file = drive_service.files().create(
+                        body={"name": cand_title, "mimeType": "application/pdf"},
+                        media_body=media
+                    ).execute()
+                    cand_url = f"https://drive.google.com/file/d/{uploaded_file.get('id')}/view"
+                    
+                    # Clean local temporary files
+                    if os.path.exists(temp_in_path): os.remove(temp_in_path)
+                    if os.path.exists(temp_out_path): os.remove(temp_out_path)
+                    
+                    model_to_use = f"Cloud Translation - {job.get('translation_tier', 'basic').capitalize()}"
+                    update_job_status(job_id, "PENDING_REVIEW", cand_url, model_to_use, pages_translated=pages_count)
+                else:
+                    tokens_used = translate_pdf_file(
+                        temp_in_path, 
+                        temp_out_path, 
+                        job, 
+                        config_settings, 
+                        prompt_template
+                    )
+                    
+                    # Upload candidate PDF copy back to Google Drive
+                    from googleapiclient.http import MediaFileUpload
+                    cand_title = f"{title.replace('.pdf', '')}_translation_candidate_{job['target_lang']}.pdf"
+                    media = MediaFileUpload(temp_out_path, mimetype='application/pdf')
+                    uploaded_file = drive_service.files().create(
+                        body={"name": cand_title, "mimeType": "application/pdf"},
+                        media_body=media
+                    ).execute()
+                    cand_url = f"https://drive.google.com/file/d/{uploaded_file.get('id')}/view"
+                    
+                    # Clean local temporary files
+                    if os.path.exists(temp_in_path): os.remove(temp_in_path)
+                    if os.path.exists(temp_out_path): os.remove(temp_out_path)
+                    
+                    log_tokens(job_id, tokens_used)
+                    model_to_use = job["model_override"] if job["model_override"] else config_settings["model"]
+                    update_job_status(job_id, "PENDING_REVIEW", cand_url, model_to_use)
                 
     except Exception as e:
         log_event("ERROR", f"Job ID {job_id} failed during translation: {e}")
