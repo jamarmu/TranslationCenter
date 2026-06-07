@@ -616,7 +616,11 @@ def process_translation_job(job_id):
             )
             
             # Upload Candidate to Output GCS bucket
-            cand_filename = f"{job_id}_translation_candidate_{job['target_lang']}.pdf"
+            dir_part, file_part = os.path.split(blob_name)
+            name_part, ext_part = os.path.splitext(file_part)
+            cand_filename = f"{name_part}_translation_candidate_{job['target_lang']}{ext_part}"
+            if dir_part:
+                cand_filename = f"{dir_part}/{cand_filename}"
             cand_uri = f"gs://{OUTPUT_BUCKET}/{cand_filename}"
             client.bucket(OUTPUT_BUCKET).blob(cand_filename).upload_from_filename(temp_out_path)
             

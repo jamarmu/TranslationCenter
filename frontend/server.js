@@ -426,6 +426,13 @@ app.post('/api/jobs/:id/approve', authenticateToken, requireRole(['user', 'admin
         // Copy in GCS
         await storage.bucket(bucketName).file(candFile).copy(storage.bucket(bucketName).file(finalFile));
         finalOutputPath = `gs://${bucketName}/${finalFile}`;
+        
+        // Delete candidate file from storage bucket once approved
+        try {
+          await storage.bucket(bucketName).file(candFile).delete();
+        } catch (delErr) {
+          await logToDb('WARNING', `Could not delete candidate file ${candFile}: ${delErr.message}`);
+        }
       }
     } else {
       // In Google Drive, rename/make a new copy (or backend handles it, here we assume renaming)
