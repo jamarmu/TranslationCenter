@@ -470,7 +470,7 @@ def extract_gdoc_to_temps(drive_url, job, docs_service, drive_service, destinati
     return temp_template.name, temp_source.name
 
 
-def merge_gdoc_from_temps(layout_json_path, translated_xml_path, docs_service):
+def merge_gdoc_from_temps(layout_json_path, translated_xml_path, docs_service, job):
     with open(layout_json_path, 'r', encoding='utf-8') as f:
         layout_data = json.load(f)
         
@@ -522,6 +522,18 @@ def merge_gdoc_from_temps(layout_json_path, translated_xml_path, docs_service):
             }
         }))
         
+    # Add translation header statement at index 1
+    timestamp_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    statement = f"Translated with Gemini by Translation Center from {job['source_lang']} to {job['target_lang']} on {timestamp_str}\n"
+    update_ops.append((1, 2, {
+        "insertText": {
+            "location": {
+                "index": 1
+            },
+            "text": statement
+        }
+    }))
+    
     update_ops.sort(key=lambda x: (-x[0], x[1]))
     requests = [op[2] for op in update_ops]
     
@@ -558,7 +570,7 @@ def translate_google_doc(drive_url, job, config_settings, prompt_template, desti
                 return f"https://docs.google.com/document/d/{layout_data['target_doc_id']}/edit", 0
                 
         tokens_used = translate_source_temp(source_temp, job, config_settings, prompt_template)
-        cand_url = merge_gdoc_from_temps(layout_temp, source_temp, docs_service)
+        cand_url = merge_gdoc_from_temps(layout_temp, source_temp, docs_service, job)
         return cand_url, tokens_used
     finally:
         if os.path.exists(layout_temp): os.remove(layout_temp)
