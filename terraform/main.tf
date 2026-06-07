@@ -53,7 +53,7 @@ resource "null_resource" "build_backend" {
   }
 
   provisioner "local-exec" {
-    command = "sleep 30 && gcloud builds submit --tag ${var.region}-docker.pkg.dev/${var.project_id}/${google_artifact_registry_repository.translation_repo.repository_id}/translation-backend:latest ${path.module}/../backend --project ${var.project_id}"
+    command = "sleep 60 && gcloud builds submit --tag ${var.region}-docker.pkg.dev/${var.project_id}/${google_artifact_registry_repository.translation_repo.repository_id}/translation-backend:latest ${path.module}/../backend --project ${var.project_id}"
   }
 
   depends_on = [
@@ -81,7 +81,7 @@ resource "null_resource" "build_frontend" {
   }
 
   provisioner "local-exec" {
-    command = "sleep 30 && gcloud builds submit --tag ${var.region}-docker.pkg.dev/${var.project_id}/${google_artifact_registry_repository.translation_repo.repository_id}/translation-frontend:latest ${path.module}/../frontend --project ${var.project_id}"
+    command = "sleep 60 && gcloud builds submit --tag ${var.region}-docker.pkg.dev/${var.project_id}/${google_artifact_registry_repository.translation_repo.repository_id}/translation-frontend:latest ${path.module}/../frontend --project ${var.project_id}"
   }
 
   depends_on = [
