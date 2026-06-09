@@ -3,3 +3,4 @@ Change user passwords from UI
 Add/remove users from UI
 
 Integration with Google identity
+Other file formats ... only Google Docs and PDF are supported now
