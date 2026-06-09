@@ -1,0 +1,5 @@
+Document and change default users' password
+Change user passwords from UI
+Add/remove users from UI
+
+Integration with Google identity
